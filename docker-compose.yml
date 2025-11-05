@@ -1,0 +1,126 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: sns-orchestrator-db
+    environment:
+      POSTGRES_USER: sns_user
+      POSTGRES_PASSWORD: sns_password
+      POSTGRES_DB: sns_orchestrator
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - sns-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sns_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: sns-orchestrator-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - sns-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sns-orchestrator-backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sns_user:sns_password@postgres:5432/sns_orchestrator
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-this}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET}
+      X_CLIENT_ID: ${X_CLIENT_ID}
+      X_CLIENT_SECRET: ${X_CLIENT_SECRET}
+      INSTAGRAM_CLIENT_ID: ${INSTAGRAM_CLIENT_ID}
+      INSTAGRAM_CLIENT_SECRET: ${INSTAGRAM_CLIENT_SECRET}
+      TIKTOK_CLIENT_ID: ${TIKTOK_CLIENT_ID}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET}
+      BRIGHTDATA_API_KEY: ${BRIGHTDATA_API_KEY}
+      MULOGIN_API_KEY: ${MULOGIN_API_KEY}
+    ports:
+      - "8006:8006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./audit_logs:/app/audit_logs
+    networks:
+      - sns-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8006 --reload
+
+  # Worker
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sns-orchestrator-worker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sns_user:sns_password@postgres:5432/sns_orchestrator
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-this}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./audit_logs:/app/audit_logs
+    networks:
+      - sns-network
+    command: python -m app.workers.executor
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sns-orchestrator-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8006
+    ports:
+      - "3006:3006"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - sns-network
+    command: npm run dev
+
+networks:
+  sns-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

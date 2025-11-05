@@ -1,0 +1,18 @@
+# AWS Configuration
+aws_region   = "ap-northeast-1"
+project_name = "sns-orchestrator"
+environment  = "production"
+
+# GitHub Configuration (オプション: GitHub連携を使う場合)
+github_repo_url      = "https://github.com/your-username/sns-agents"
+github_access_token  = ""  # GitHub Personal Access Token
+branch_name          = "main"
+enable_auto_build    = true
+
+# Backend API URL (必須)
+backend_api_url = "https://your-backend-api.amazonaws.com"
+
+# Custom Domain (オプション)
+custom_domain        = ""  # 例: "example.com"
+subdomain_prefix     = ""  # 例: "app" → app.example.com
+enable_www_redirect  = false
