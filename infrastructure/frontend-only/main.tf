@@ -85,21 +85,8 @@ resource "aws_amplify_app" "frontend" {
     ])
   }
 
-  # カスタムルール（Next.js用）
-  custom_rule {
-    source = "/<*>"
-    status = "404-200"
-    target = "/index.html"
-  }
-
-  custom_rule {
-    source = "</^[^.]+$|\\.(?!(css|gif|ico|jpg|js|png|txt|svg|woff|woff2|ttf|map|json|webp)$)([^.]+$)/>"
-    status = "200"
-    target = "/index.html"
-  }
-
-  # カスタムヘッダーはNext.js config (next.config.js)で管理されます
-  # Amplifyのmonorepo構造との互換性のため
+  # Next.js SSR with WEB_COMPUTE doesn't need custom rules
+  # Routes are handled by Next.js server
 
   # プラットフォーム設定
   platform = "WEB_COMPUTE"
