@@ -12,7 +12,7 @@ applications:
             - npm run build
             - echo "Build completed successfully"
       artifacts:
-        baseDirectory: .next
+        baseDirectory: .
         files:
           - '**/*'
       cache:
