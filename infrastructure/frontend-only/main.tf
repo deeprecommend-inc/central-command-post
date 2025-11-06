@@ -74,8 +74,9 @@ resource "aws_amplify_app" "frontend" {
 
   # 環境変数
   environment_variables = {
-    NEXT_PUBLIC_API_URL = var.backend_api_url
-    _LIVE_UPDATES       = jsonencode([
+    NEXT_PUBLIC_API_URL          = var.backend_api_url
+    AMPLIFY_MONOREPO_APP_ROOT    = "frontend"
+    _LIVE_UPDATES                = jsonencode([
       {
         pkg     = "next"
         type    = "npm"
@@ -147,7 +148,8 @@ resource "aws_amplify_branch" "main" {
   stage     = var.environment == "production" ? "PRODUCTION" : "DEVELOPMENT"
 
   environment_variables = {
-    NEXT_PUBLIC_API_URL = var.backend_api_url
+    NEXT_PUBLIC_API_URL          = var.backend_api_url
+    AMPLIFY_MONOREPO_APP_ROOT    = "frontend"
   }
 
   tags = {
