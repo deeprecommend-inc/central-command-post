@@ -1,41 +1,18 @@
 version: 1
-frontend:
-    phases:
+applications:
+  - appRoot: frontend
+    frontend:
+      phases:
         preBuild:
-            commands:
-                - cd frontend
-                - npm ci
+          commands:
+            - npm ci
         build:
-            commands:
-                - echo "Building Next.js application..."
-                - npm run build
-                - echo "Build completed successfully"
-    artifacts:
-        baseDirectory: frontend/.next
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: .next
         files:
-            - '**/*'
-    cache:
+          - '**/*'
+      cache:
         paths:
-            - frontend/node_modules/**/*
-            - frontend/.next/cache/**/*
-    customHeaders:
-        - pattern: '**/*'
-          headers:
-              - key: 'X-Frame-Options'
-                value: 'SAMEORIGIN'
-              - key: 'X-Content-Type-Options'
-                value: 'nosniff'
-              - key: 'X-XSS-Protection'
-                value: '1; mode=block'
-        - pattern: '_next/static/**/*'
-          headers:
-              - key: 'Cache-Control'
-                value: 'public, max-age=31536000, immutable'
-        - pattern: 'public/**/*'
-          headers:
-              - key: 'Cache-Control'
-                value: 'public, max-age=31536000, immutable'
-        - pattern: '*.png'
-          headers:
-              - key: 'Cache-Control'
-                value: 'public, max-age=31536000, immutable'
+          - node_modules/**/*

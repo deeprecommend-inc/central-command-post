@@ -5,10 +5,10 @@ environment  = "development"
 
 # GitHub Configuration (オプション: GitHub連携を使う場合)
 # 本番環境では GitHub連携を推奨
-github_repo_url      = ""
-github_access_token  = ""
+github_repo_url      = "https://github.com/deeprecommend-inc/sns-agent"
+github_access_token  = "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"
 branch_name          = "main"
-enable_auto_build    = false  # GitHub連携なしの場合は false
+enable_auto_build    = true  # GitHub連携を有効化
 
 # Backend API URL (必須)
 # 開発環境ではローカルバックエンドを指定
