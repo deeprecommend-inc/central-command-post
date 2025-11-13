@@ -97,6 +97,7 @@ export default function CreateRun() {
   const [observability, setObservability] = useState(DEFAULT_OBSERVABILITY);
   const [showAdvancedObservability, setShowAdvancedObservability] = useState(false);
   const [ipProxyList, setIpProxyList] = useState(''); // IP/Proxyリスト
+  const [extractedProxies, setExtractedProxies] = useState<any[]>([]); // 抽出されたIP/Proxy
   const [fixedUAPerIP, setFixedUAPerIP] = useState(true); // 1IP/Proxyに1User-Agent固定
   const [headlessMode, setHeadlessMode] = useState(true); // ヘッドレスモード（画面なし）
   const [retryOnError, setRetryOnError] = useState(true); // エラー時にリトライを実行
@@ -121,6 +122,100 @@ export default function CreateRun() {
     tiktok_caption: '',
     tiktok_sound_id: '',
   });
+
+  // IP抽出関数
+  const extractProxiesFromText = () => {
+    if (!ipProxyList.trim()) {
+      alert('IP/Proxyリストを入力してください');
+      return;
+    }
+
+    const lines = ipProxyList.trim().split('\n');
+    const extracted: any[] = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+
+      const parsed = parseProxyLine(trimmed);
+      if (parsed) {
+        extracted.push(parsed);
+      }
+    }
+
+    if (extracted.length === 0) {
+      alert('有効なIP/Proxyが見つかりませんでした');
+      return;
+    }
+
+    setExtractedProxies(extracted);
+  };
+
+  const parseProxyLine = (line: string): any | null => {
+    // プロトコル指定あり: http://IP:PORT, socks5://IP:PORT
+    const protocolMatch = line.match(/^(https?|socks5):\/\/(.+)/);
+    let proxyType = 'http';
+    let rest = line;
+
+    if (protocolMatch) {
+      proxyType = protocolMatch[1] === 'socks5' ? 'socks5' : 'http';
+      rest = protocolMatch[2];
+    }
+
+    // USER:PASS@IP:PORT 形式
+    const authMatch = rest.match(/^([^:]+):([^@]+)@([^:]+):(\d+)/);
+    if (authMatch) {
+      return {
+        ip_address: authMatch[3],
+        port: parseInt(authMatch[4]),
+        username: authMatch[1],
+        password: authMatch[2],
+        proxy_type: proxyType,
+        original: line,
+      };
+    }
+
+    // IP:PORT:USER:PASS 形式
+    const fullMatch = rest.match(/^([^:]+):(\d+):([^:]+):(.+)/);
+    if (fullMatch) {
+      return {
+        ip_address: fullMatch[1],
+        port: parseInt(fullMatch[2]),
+        username: fullMatch[3],
+        password: fullMatch[4],
+        proxy_type: proxyType,
+        original: line,
+      };
+    }
+
+    // IP:PORT 形式
+    const simpleMatch = rest.match(/^([^:]+):(\d+)/);
+    if (simpleMatch) {
+      return {
+        ip_address: simpleMatch[1],
+        port: parseInt(simpleMatch[2]),
+        proxy_type: proxyType,
+        original: line,
+      };
+    }
+
+    // IP のみ（ポートなし）
+    const ipOnlyMatch = rest.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+    if (ipOnlyMatch) {
+      return {
+        ip_address: ipOnlyMatch[1],
+        port: null,
+        proxy_type: 'direct',
+        original: line,
+      };
+    }
+
+    return null;
+  };
+
+  const removeExtractedProxy = (index: number) => {
+    setExtractedProxies(extractedProxies.filter((_, i) => i !== index));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -615,19 +710,98 @@ export default function CreateRun() {
             <CardContent className="space-y-4">
               {/* IP/Proxyリスト */}
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  使用IP/Proxyリスト（1行に1つ）
-                </label>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="block text-sm font-medium">
+                    使用IP/Proxyリスト（1行に1つ）
+                  </label>
+                  <button
+                    type="button"
+                    onClick={extractProxiesFromText}
+                    className="px-3 py-1 text-sm bg-green-600 text-white rounded-md hover:bg-green-700"
+                  >
+                    抽出を実行
+                  </button>
+                </div>
                 <textarea
                   value={ipProxyList}
                   onChange={(e) => setIpProxyList(e.target.value)}
-                  placeholder={'例:\n123.45.67.89\nproxy1.example.com:8080\n98.76.54.32\n103.20.30.40'}
+                  placeholder={'例:\n123.45.67.89\nproxy1.example.com:8080\n98.76.54.32\n103.20.30.40\nuser:pass@192.168.1.1:8080'}
                   className="w-full px-4 py-2 border rounded-md min-h-[120px] font-mono text-sm"
                 />
                 <p className="text-xs text-muted-foreground mt-1">
                   使用するIPアドレスまたはProxyを1行に1つずつ入力。空欄の場合はデフォルトIPを使用します。
                 </p>
               </div>
+
+              {/* 抽出されたIP/Proxyの表示 */}
+              {extractedProxies.length > 0 && (
+                <div className="border rounded-md p-4 bg-gray-50">
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="font-medium">
+                      抽出されたIP/Proxy ({extractedProxies.length}件)
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => setExtractedProxies([])}
+                      className="text-sm text-gray-600 hover:text-gray-800"
+                    >
+                      クリア
+                    </button>
+                  </div>
+
+                  <div className="max-h-64 overflow-y-auto border rounded-md bg-white">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-100 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 text-left">IP</th>
+                          <th className="px-3 py-2 text-left">ポート</th>
+                          <th className="px-3 py-2 text-left">タイプ</th>
+                          <th className="px-3 py-2 text-left">認証</th>
+                          <th className="px-3 py-2 text-center">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {extractedProxies.map((proxy, index) => (
+                          <tr key={index} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 font-mono text-xs">{proxy.ip_address}</td>
+                            <td className="px-3 py-2">{proxy.port || '-'}</td>
+                            <td className="px-3 py-2">
+                              <span className="text-xs px-2 py-1 bg-blue-100 text-blue-800 rounded">
+                                {proxy.proxy_type}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">
+                              {proxy.username ? (
+                                <span className="text-xs px-2 py-1 bg-green-100 text-green-800 rounded">
+                                  あり
+                                </span>
+                              ) : (
+                                <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded">
+                                  なし
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <button
+                                type="button"
+                                onClick={() => removeExtractedProxy(index)}
+                                className="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200"
+                              >
+                                削除
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded text-sm text-blue-800">
+                    <strong>{extractedProxies.length}件</strong>のIP/Proxyが有効です。
+                    不要なものは削除ボタンで除外できます。
+                  </div>
+                </div>
+              )}
 
               {/* ブラウザ実行モード設定 */}
               <div className="space-y-3">

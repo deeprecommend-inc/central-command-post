@@ -6,7 +6,7 @@ import uvicorn
 from .core.config import settings
 from .models.database import init_db
 from .services.redis_service import redis_service
-from .api import oauth, runs, drafts, metrics, schedules, exports, account_generation
+from .api import oauth, runs, drafts, metrics, schedules, exports, account_generation, proxy_ips, personas, browser_actions
 
 
 @asynccontextmanager
@@ -38,13 +38,16 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(oauth.router, prefix="/oauth", tags=["OAuth"])
+app.include_router(browser_actions.router, tags=["Browser Actions"])  # New prompt-based API
+app.include_router(oauth.router, prefix="/oauth", tags=["OAuth (Legacy)"])
 app.include_router(runs.router, prefix="/runs", tags=["Runs"])
 app.include_router(drafts.router, prefix="/drafts", tags=["AI Drafts"])
 app.include_router(metrics.router, prefix="/metrics", tags=["Metrics"])
 app.include_router(schedules.router, tags=["Campaigns"])
 app.include_router(exports.router, tags=["Exports"])
 app.include_router(account_generation.router, tags=["Account Generation"])
+app.include_router(proxy_ips.router, tags=["Proxy IPs"])
+app.include_router(personas.router, tags=["Personas"])
 
 
 @app.get("/")

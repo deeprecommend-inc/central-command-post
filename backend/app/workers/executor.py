@@ -5,7 +5,10 @@ import random
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from ..models.database import Run, RunEvent, ObservabilityMetric, KillSwitch, RunStatusEnum
+from ..models.database import (
+    Run, RunEvent, ObservabilityMetric, KillSwitch, RunStatusEnum,
+    AccountGenerationTask, AccountGenStatusEnum, TaskLog, LogLevelEnum
+)
 from ..adapters.base_adapter import BaseSNSAdapter
 from ..adapters.youtube_adapter import YouTubeAdapter
 from ..adapters.x_adapter import XAdapter
@@ -14,6 +17,7 @@ from ..adapters.tiktok_adapter import TikTokAdapter
 from ..services.redis_service import redis_service
 from ..services.observability import ObservabilityMonitor, ObservabilityThreshold
 from ..services.audit_service import audit_log
+from ..services.account_generator import account_generator
 
 
 class ExecutionEngine:
@@ -255,6 +259,9 @@ class WorkerScheduler:
 
         while self.running:
             try:
+                # Check for account generation tasks
+                await self._check_account_generation_tasks()
+
                 # Dequeue job from Redis
                 job = await redis_service.dequeue_job("execution_queue")
 
@@ -272,6 +279,110 @@ class WorkerScheduler:
         """Stop worker scheduler"""
         print("Stopping worker scheduler...")
         self.running = False
+
+    async def _check_account_generation_tasks(self):
+        """Check for pending account generation tasks"""
+        from ..models.database import async_session_maker, Persona
+
+        async with async_session_maker() as session:
+            # Find tasks in GENERATING status
+            result = await session.execute(
+                select(AccountGenerationTask).where(
+                    AccountGenerationTask.status == AccountGenStatusEnum.GENERATING
+                )
+            )
+            tasks = result.scalars().all()
+
+            for task in tasks:
+                # Process task
+                print(f"Processing account generation task {task.id}")
+                await self._process_account_generation_task(task, session)
+
+    async def _process_account_generation_task(self, task: AccountGenerationTask, session: AsyncSession):
+        """Process a single account generation task"""
+        try:
+            # Get persona if specified
+            persona = None
+            if task.persona_id:
+                from ..models.database import Persona
+                result = await session.execute(
+                    select(Persona).where(Persona.id == task.persona_id)
+                )
+                persona = result.scalar_one_or_none()
+
+            # Log start
+            start_log = TaskLog(
+                task_id=task.id,
+                level=LogLevelEnum.INFO,
+                message=f"バッチ {task.current_batch + 1}/{(task.target_count + task.batch_size - 1) // task.batch_size} を開始",
+                details={"batch_start": task.completed_count + task.failed_count}
+            )
+            session.add(start_log)
+            await session.commit()
+
+            # Process batch
+            batch_start = task.completed_count + task.failed_count
+            batch_size = min(task.batch_size, task.target_count - batch_start)
+
+            if batch_size > 0:
+                results = await account_generator.generate_accounts_batch(
+                    task=task,
+                    persona=persona,
+                    session=session,
+                    batch_start=batch_start,
+                    batch_size=batch_size
+                )
+
+                # Update task counts
+                task.completed_count += results["completed"]
+                task.failed_count += results["failed"]
+                task.current_batch += 1
+
+                # Log results
+                result_log = TaskLog(
+                    task_id=task.id,
+                    level=LogLevelEnum.INFO,
+                    message=f"バッチ完了: 成功 {results['completed']}, 失敗 {results['failed']}",
+                    details=results
+                )
+                session.add(result_log)
+
+                # Check if task is complete
+                if task.completed_count + task.failed_count >= task.target_count:
+                    task.status = AccountGenStatusEnum.COMPLETED
+                    task.completed_at = datetime.now()
+
+                    complete_log = TaskLog(
+                        task_id=task.id,
+                        level=LogLevelEnum.SUCCESS,
+                        message=f"タスク完了: 合計 {task.completed_count} 成功, {task.failed_count} 失敗",
+                        details={
+                            "completed_count": task.completed_count,
+                            "failed_count": task.failed_count,
+                            "total_batches": task.current_batch
+                        }
+                    )
+                    session.add(complete_log)
+
+                await session.commit()
+
+        except Exception as e:
+            print(f"Error processing account generation task {task.id}: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # Update task status to failed
+            task.status = AccountGenStatusEnum.FAILED
+            task.error_message = str(e)
+
+            error_log = TaskLog(
+                task_id=task.id,
+                level=LogLevelEnum.ERROR,
+                message=f"タスク失敗: {str(e)}",
+                details={"error": str(e), "traceback": traceback.format_exc()}
+            )
+            session.add(error_log)
+            await session.commit()
 
     async def _process_job(self, job: Dict[str, Any]):
         """Process a single job"""

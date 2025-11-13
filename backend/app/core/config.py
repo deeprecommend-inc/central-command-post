@@ -5,8 +5,8 @@ import os
 
 class Settings(BaseSettings):
     # Application
-    APP_NAME: str = "SNS Orchestrator"
-    VERSION: str = "1.3.0"
+    APP_NAME: str = "釈迦AI (Shaka AI)"
+    VERSION: str = "2.0.0"
     DEBUG: bool = False
     ENVIRONMENT: str = "production"
 

@@ -42,17 +42,19 @@ class RunStatusEnum(str, enum.Enum):
     ABORTED = "aborted"
 
 
-# Accounts Table
+# Accounts Table (Browser-based, no OAuth)
 class Account(Base):
     __tablename__ = "accounts"
 
     id = Column(Integer, primary_key=True, index=True)
     platform = Column(SQLEnum(PlatformEnum), nullable=False, index=True)
-    oauth_token_ref = Column(String(255), nullable=False)  # Encrypted reference
+    username = Column(String(255), nullable=False)  # SNS username
+    email = Column(String(255))  # Login email
+    password_encrypted = Column(String(255))  # Encrypted password for browser login
     owner_user_id = Column(Integer, nullable=False, index=True)
     status = Column(SQLEnum(StatusEnum), default=StatusEnum.ACTIVE)
     display_name = Column(String(255))
-    account_metadata = Column(JSON, default={})
+    account_metadata = Column(JSON, default={})  # Browser session, cookies, etc
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -180,6 +182,17 @@ class KillSwitch(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+# Persona Type Enum
+class PersonaTypeEnum(str, enum.Enum):
+    INDIVIDUAL = "individual"  # 個人
+    BUSINESS = "business"  # ビジネス
+    INFLUENCER = "influencer"  # インフルエンサー
+    BRAND = "brand"  # ブランド
+    JOURNALIST = "journalist"  # ジャーナリスト
+    ARTIST = "artist"  # アーティスト
+    DEVELOPER = "developer"  # 開発者
+
+
 # Account Generation Status Enum
 class AccountGenStatusEnum(str, enum.Enum):
     PENDING = "pending"  # 生成待ち
@@ -190,6 +203,68 @@ class AccountGenStatusEnum(str, enum.Enum):
     SUSPENDED = "suspended"  # 停止
 
 
+class ProxyTypeEnum(str, enum.Enum):
+    HTTP = "http"
+    HTTPS = "https"
+    SOCKS5 = "socks5"
+
+
+class ProxyQualityEnum(str, enum.Enum):
+    EXCELLENT = "excellent"  # 優良（応答時間<500ms、成功率>95%）
+    GOOD = "good"  # 良好（応答時間<1000ms、成功率>85%）
+    FAIR = "fair"  # 普通（応答時間<2000ms、成功率>70%）
+    POOR = "poor"  # 低品質（それ以下）
+    UNTESTED = "untested"  # 未テスト
+
+
+# Persona Table
+class Persona(Base):
+    """ペルソナ（人格）定義"""
+    __tablename__ = "personas"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # ペルソナ基本情報
+    name = Column(String(255), nullable=False)  # ペルソナ名
+    persona_type = Column(SQLEnum(PersonaTypeEnum), nullable=False)  # タイプ
+
+    # 人物像
+    age_range = Column(String(50))  # 年齢層（例: 20-30）
+    gender = Column(String(20))  # 性別
+    location_country = Column(String(2))  # 国コード
+    location_city = Column(String(100))  # 都市
+    timezone = Column(String(50))  # タイムゾーン
+    language = Column(String(10))  # 言語（例: en-US, ja-JP）
+
+    # 興味・関心
+    interests = Column(JSON, default=[])  # 興味のあるトピック
+    occupation = Column(String(255))  # 職業
+    education_level = Column(String(50))  # 学歴
+
+    # 行動パターン
+    activity_hours = Column(JSON, default={})  # アクティブな時間帯 {"weekday": "9-17", "weekend": "10-22"}
+    posting_frequency = Column(String(50))  # 投稿頻度（例: high, medium, low）
+    interaction_style = Column(String(50))  # インタラクションスタイル（例: friendly, professional, casual）
+
+    # ブラウザ指紋設定
+    browser_fingerprint_config = Column(JSON, default={})  # Mulogin設定
+    preferred_device = Column(String(50))  # デバイスタイプ（例: desktop, mobile, tablet）
+    screen_resolution = Column(String(50))  # 画面解像度（例: 1920x1080）
+
+    # プロフィール生成設定
+    profile_template = Column(JSON, default={})  # プロフィール雛形
+    avatar_style = Column(String(50))  # アバタースタイル
+    bio_template = Column(Text)  # 自己紹介テンプレート
+
+    # ステータス
+    is_active = Column(Boolean, default=True)
+
+    # メタデータ
+    created_by = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 # Account Generation Tasks Table
 class AccountGenerationTask(Base):
     """アカウント自動生成タスク"""
@@ -197,9 +272,18 @@ class AccountGenerationTask(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     platform = Column(SQLEnum(PlatformEnum), nullable=False, index=True)
-    target_count = Column(Integer, nullable=False)  # 生成目標数
+
+    # ペルソナベース生成
+    persona_id = Column(Integer, ForeignKey("personas.id"), nullable=True, index=True)  # ペルソナID
+
+    # 大規模生成対応（100万アカウントまで）
+    target_count = Column(Integer, nullable=False)  # 生成目標数（最大1000000）
     completed_count = Column(Integer, default=0)  # 完了数
     failed_count = Column(Integer, default=0)  # 失敗数
+
+    # バッチ処理設定
+    batch_size = Column(Integer, default=100)  # バッチサイズ（同時生成数）
+    current_batch = Column(Integer, default=0)  # 現在のバッチ番号
 
     # 生成設定
     generation_config = Column(JSON, nullable=False)  # username_pattern, email_domain, phone_provider, etc.
@@ -207,6 +291,12 @@ class AccountGenerationTask(Base):
     # プロキシ・IP設定
     proxy_list = Column(JSON, default=[])  # 使用するプロキシリスト
     use_residential_proxy = Column(Boolean, default=True)  # レジデンシャルプロキシを使用
+    use_brightdata = Column(Boolean, default=False)  # BrightData使用
+    brightdata_zone = Column(String(255))  # BrightDataゾーン
+
+    # Mulogin設定
+    use_mulogin = Column(Boolean, default=True)  # Mulogin使用
+    mulogin_group_id = Column(String(255))  # Mulginグループグループ
 
     # ブラウザ設定
     headless = Column(Boolean, default=True)
@@ -223,6 +313,36 @@ class AccountGenerationTask(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 
+# Task Log Level Enum
+class LogLevelEnum(str, enum.Enum):
+    DEBUG = "debug"
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    SUCCESS = "success"
+
+
+# Task Logs Table
+class TaskLog(Base):
+    """タスク実行ログ（リアルタイム表示用）"""
+    __tablename__ = "task_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("account_generation_tasks.id"), nullable=False, index=True)
+
+    # ログ内容
+    level = Column(SQLEnum(LogLevelEnum), nullable=False, default=LogLevelEnum.INFO)
+    message = Column(Text, nullable=False)
+    details = Column(JSON, default={})  # 追加情報（エラーstack trace、プロセス詳細など）
+
+    # アカウント情報（このログが特定のアカウント生成に関連する場合）
+    account_index = Column(Integer)  # バッチ内のアカウント番号
+    account_username = Column(String(255))  # 生成中のアカウント名
+
+    # タイムスタンプ
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 # Generated Accounts Table
 class GeneratedAccount(Base):
     """自動生成されたアカウント"""
@@ -230,6 +350,7 @@ class GeneratedAccount(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     task_id = Column(Integer, ForeignKey("account_generation_tasks.id"), nullable=False, index=True)
+    persona_id = Column(Integer, ForeignKey("personas.id"), nullable=True, index=True)  # ペルソナID
     platform = Column(SQLEnum(PlatformEnum), nullable=False, index=True)
 
     # アカウント情報（暗号化）
@@ -242,6 +363,11 @@ class GeneratedAccount(Base):
     proxy_used = Column(String(255))  # 使用したプロキシ
     ip_address = Column(String(45))  # 生成時のIPアドレス
     user_agent = Column(String(500))  # 使用したUser-Agent
+
+    # Mulogin指紋情報
+    mulogin_profile_id = Column(String(255))  # Muloginプロファイル ID
+    mulogin_profile_name = Column(String(255))  # Muloginプロファイル名
+    browser_fingerprint = Column(JSON, default={})  # ブラウザ指紋詳細
 
     # 認証情報
     verification_code = Column(String(100))  # SMS/Email認証コード
@@ -259,6 +385,87 @@ class GeneratedAccount(Base):
     verified_at = Column(DateTime(timezone=True))
     last_login = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+# Proxy IP Pool Table
+class ProxyIP(Base):
+    """プロキシIPプール管理"""
+    __tablename__ = "proxy_ips"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # プロキシ情報
+    ip_address = Column(String(45), nullable=False, index=True)  # IPv6対応
+    port = Column(Integer, nullable=False)
+    proxy_type = Column(SQLEnum(ProxyTypeEnum), default=ProxyTypeEnum.HTTP)
+    username = Column(String(255))  # 認証ユーザー名
+    password_encrypted = Column(String(500))  # 暗号化されたパスワード
+
+    # プロキシの分類
+    is_residential = Column(Boolean, default=False)  # レジデンシャルプロキシ
+    is_mobile = Column(Boolean, default=False)  # モバイルプロキシ
+    country_code = Column(String(2))  # ISO 3166-1 alpha-2
+    region = Column(String(100))  # 地域
+    city = Column(String(100))  # 都市
+    isp = Column(String(255))  # ISP名
+
+    # 品質メトリクス
+    quality = Column(SQLEnum(ProxyQualityEnum), default=ProxyQualityEnum.UNTESTED, index=True)
+    response_time_ms = Column(Float)  # 平均応答時間（ミリ秒）
+    success_rate = Column(Float, default=0.0)  # 成功率（0.0-1.0）
+    total_requests = Column(Integer, default=0)  # 総リクエスト数
+    successful_requests = Column(Integer, default=0)  # 成功リクエスト数
+    failed_requests = Column(Integer, default=0)  # 失敗リクエスト数
+
+    # ブロック状況
+    blocked_platforms = Column(JSON, default=[])  # ブロックされたプラットフォームリスト
+    last_blocked_at = Column(DateTime(timezone=True))  # 最後にブロックされた時刻
+
+    # 使用状況
+    last_used_at = Column(DateTime(timezone=True))  # 最後に使用された時刻
+    last_tested_at = Column(DateTime(timezone=True))  # 最後にテストされた時刻
+    concurrent_users = Column(Integer, default=0)  # 同時使用数
+
+    # ステータス
+    is_active = Column(Boolean, default=True, index=True)  # アクティブ状態
+    is_banned = Column(Boolean, default=False)  # 完全禁止
+
+    # メタデータ
+    source = Column(String(255))  # プロキシの入手元
+    notes = Column(Text)  # メモ
+    proxy_metadata = Column(JSON, default={})  # その他のメタデータ
+
+    # タイムスタンプ
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+# Proxy Test Results Table
+class ProxyTestResult(Base):
+    """プロキシテスト結果の履歴"""
+    __tablename__ = "proxy_test_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    proxy_id = Column(Integer, ForeignKey("proxy_ips.id"), nullable=False, index=True)
+
+    # テスト結果
+    success = Column(Boolean, nullable=False)
+    response_time_ms = Column(Float)
+    status_code = Column(Integer)
+    error_message = Column(Text)
+
+    # テスト対象
+    test_url = Column(String(500))
+    platform = Column(SQLEnum(PlatformEnum))  # どのプラットフォームでテストしたか
+
+    # 検出情報
+    detected_ip = Column(String(45))  # テスト時に検出されたIP
+    detected_location = Column(JSON)  # 検出された位置情報
+    is_vpn_detected = Column(Boolean, default=False)  # VPN検知
+    is_proxy_detected = Column(Boolean, default=False)  # プロキシ検知
+
+    # タイムスタンプ
+    tested_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 async def get_db():

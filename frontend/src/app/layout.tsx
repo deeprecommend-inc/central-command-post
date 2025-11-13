@@ -6,8 +6,8 @@ import Navigation from '@/components/Navigation'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'SNS運用オーケストレーター',
-  description: 'マルチプラットフォームSNS運用管理システム',
+  title: '釈迦AI - プロンプトベースSNS自動化',
+  description: '自然言語でSNSを操作する次世代AIエージェントシステム',
 }
 
 export default function RootLayout({

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import TaskLogs from '@/components/TaskLogs';
 
 interface GenerationTask {
   id: number;
@@ -52,6 +53,7 @@ export default function AccountGenerationPage() {
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  const [selectedTaskForLogs, setSelectedTaskForLogs] = useState<number | null>(null);
 
   // フォーム状態
   const [formData, setFormData] = useState({
@@ -300,7 +302,7 @@ export default function AccountGenerationPage() {
           </div>
         </div>
 
-        {/* タスク一覧 */}
+        {/* タスク一覧とログ表示（2カラム） */}
         <div className="mb-8">
           <h3 className="text-xl font-semibold mb-4">生成タスク一覧</h3>
           {tasks.length === 0 ? (
@@ -310,8 +312,10 @@ export default function AccountGenerationPage() {
               </CardContent>
             </Card>
           ) : (
-            <div className="grid gap-4">
-              {tasks.map((task) => {
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* 左側：タスクカード */}
+              <div className="space-y-4">
+                {tasks.map((task) => {
                 const platformInfo = getPlatformInfo(task.platform);
                 return (
                   <Card key={task.id}>
@@ -356,6 +360,16 @@ export default function AccountGenerationPage() {
                               停止
                             </button>
                           )}
+                          <button
+                            onClick={() => setSelectedTaskForLogs(task.id)}
+                            className={`px-3 py-1 text-sm border rounded-md ${
+                              selectedTaskForLogs === task.id
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'border-blue-600 text-blue-600 hover:bg-blue-50'
+                            }`}
+                          >
+                            {selectedTaskForLogs === task.id ? '✓ ログ表示中' : 'ログを表示'}
+                          </button>
                           <button
                             onClick={() => handleDelete(task.id)}
                             className="px-3 py-1 text-sm border border-red-600 text-red-600 rounded-md hover:bg-red-50"
@@ -408,6 +422,33 @@ export default function AccountGenerationPage() {
                   </Card>
                 );
               })}
+              </div>
+
+              {/* 右側：リアルタイムログ表示 */}
+              <div className="lg:sticky lg:top-4 lg:self-start">
+                {selectedTaskForLogs ? (
+                  <div>
+                    <div className="mb-4 flex items-center justify-between">
+                      <h3 className="text-xl font-semibold">
+                        タスク #{selectedTaskForLogs} - リアルタイムログ
+                      </h3>
+                      <button
+                        onClick={() => setSelectedTaskForLogs(null)}
+                        className="text-sm text-gray-500 hover:text-gray-700"
+                      >
+                        閉じる
+                      </button>
+                    </div>
+                    <TaskLogs taskId={selectedTaskForLogs} />
+                  </div>
+                ) : (
+                  <Card>
+                    <CardContent className="py-12 text-center text-muted-foreground">
+                      タスクを選択してログを表示
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -733,6 +774,26 @@ export default function AccountGenerationPage() {
           </CardContent>
         </Card>
       </main>
+
+      {/* ログモーダル */}
+      {selectedTaskForLogs && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
+              <h2 className="text-xl font-bold">タスク #{selectedTaskForLogs} - 実行ログ</h2>
+              <button
+                onClick={() => setSelectedTaskForLogs(null)}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              <TaskLogs taskId={selectedTaskForLogs} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
