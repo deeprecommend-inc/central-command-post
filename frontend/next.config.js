@@ -2,10 +2,12 @@
 const nextConfig = {
   reactStrictMode: true,
   async rewrites() {
+    // Use backend service name when running in Docker, localhost otherwise
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL_INTERNAL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8006';
     return [
       {
         source: '/api/:path*',
-        destination: 'http://localhost:8006/:path*',
+        destination: `${apiUrl}/:path*`,
       },
     ];
   },

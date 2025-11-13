@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: sns_password
       POSTGRES_DB: sns_orchestrator
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -26,7 +26,7 @@ services:
     image: redis:7-alpine
     container_name: sns-orchestrator-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -105,6 +105,7 @@ services:
     container_name: sns-orchestrator-frontend
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8006
+      NEXT_PUBLIC_API_URL_INTERNAL: http://backend:8006
     ports:
       - "3006:3006"
     depends_on:

@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
+from pydantic import BaseModel, Field
 import secrets
 import string
 
@@ -10,6 +11,8 @@ from ..models.database import (
     get_db,
     AccountGenerationTask,
     GeneratedAccount,
+    TaskLog,
+    LogLevelEnum,
     PlatformEnum,
     AccountGenStatusEnum,
     StatusEnum
@@ -17,6 +20,24 @@ from ..models.database import (
 from ..services.audit_service import audit_log
 
 router = APIRouter()
+
+
+# Pydantic Models
+class AccountGenerationTaskCreate(BaseModel):
+    platform: str
+    target_count: int = Field(ge=1, le=1_000_000)
+    persona_id: Optional[int] = None
+    username_pattern: str = "user_{}"
+    email_domain: str = "gmail.com"
+    phone_provider: Optional[str] = None
+    proxy_list: List[str] = []
+    use_residential_proxy: bool = True
+    use_brightdata: bool = False
+    brightdata_zone: Optional[str] = None
+    use_mulogin: bool = True
+    mulogin_group_id: Optional[str] = None
+    batch_size: int = 100
+    headless: bool = True
 
 
 def generate_username(pattern: str, index: int) -> str:
@@ -45,44 +66,39 @@ def generate_password(length: int = 16) -> str:
 
 @router.post("/account-generation/tasks")
 async def create_generation_task(
-    platform: str,
-    target_count: int,
-    username_pattern: str = "user_{}",
-    email_domain: str = "temp-mail.com",
-    phone_provider: Optional[str] = None,
-    proxy_list: list[str] = [],
-    use_residential_proxy: bool = True,
-    headless: bool = True,
+    task_data: AccountGenerationTaskCreate,
     request: Request = None,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Create account generation task
-    """
-    if target_count < 1 or target_count > 100:
-        raise HTTPException(
-            status_code=400,
-            detail="target_count must be between 1 and 100"
-        )
+    ペルソナベースアカウント生成タスク作成
 
+    大規模生成対応: 1 ~ 1,000,000 アカウント
+    """
     # Validate platform
     try:
-        platform_enum = PlatformEnum[platform.upper()]
+        platform_enum = PlatformEnum[task_data.platform.upper()]
     except KeyError:
-        raise HTTPException(status_code=400, detail=f"Invalid platform: {platform}")
+        raise HTTPException(status_code=400, detail=f"Invalid platform: {task_data.platform}")
 
     # Create generation task
     task = AccountGenerationTask(
         platform=platform_enum,
-        target_count=target_count,
+        persona_id=task_data.persona_id,
+        target_count=task_data.target_count,
+        batch_size=task_data.batch_size,
         generation_config={
-            "username_pattern": username_pattern,
-            "email_domain": email_domain,
-            "phone_provider": phone_provider,
+            "username_pattern": task_data.username_pattern,
+            "email_domain": task_data.email_domain,
+            "phone_provider": task_data.phone_provider,
         },
-        proxy_list=proxy_list,
-        use_residential_proxy=use_residential_proxy,
-        headless=headless,
+        proxy_list=task_data.proxy_list,
+        use_residential_proxy=task_data.use_residential_proxy,
+        use_brightdata=task_data.use_brightdata,
+        brightdata_zone=task_data.brightdata_zone,
+        use_mulogin=task_data.use_mulogin,
+        mulogin_group_id=task_data.mulogin_group_id,
+        headless=task_data.headless,
         status=AccountGenStatusEnum.PENDING,
         created_by=1  # TODO: Get from authenticated user
     )
@@ -98,8 +114,8 @@ async def create_generation_task(
             operation="create_account_generation_task",
             payload={
                 "task_id": task.id,
-                "platform": platform,
-                "target_count": target_count,
+                "platform": task_data.platform,
+                "target_count": task_data.target_count,
             },
             session=db,
             ip_address=request.client.host if request.client else None
@@ -247,6 +263,21 @@ async def start_generation_task(
     task.started_at = datetime.now()
     await db.commit()
 
+    # Create initial log entry
+    initial_log = TaskLog(
+        task_id=task.id,
+        level=LogLevelEnum.INFO,
+        message=f"タスク開始: {task.target_count}件のアカウント生成を開始します",
+        details={
+            "platform": task.platform.value,
+            "batch_size": task.batch_size,
+            "use_mulogin": task.use_mulogin,
+            "use_brightdata": task.use_brightdata
+        }
+    )
+    db.add(initial_log)
+    await db.commit()
+
     # In production, this would enqueue the task to a worker
     # For now, we'll simulate by creating pending accounts
 
@@ -312,6 +343,66 @@ async def cancel_generation_task(
         "task_id": task.id,
         "status": task.status.value,
         "message": "Task cancelled."
+    }
+
+
+@router.post("/account-generation/tasks/{task_id}/resume")
+async def resume_generation_task(
+    task_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Resume suspended account generation task
+    """
+    result = await db.execute(
+        select(AccountGenerationTask).where(AccountGenerationTask.id == task_id)
+    )
+    task = result.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.status != AccountGenStatusEnum.SUSPENDED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task cannot be resumed from status: {task.status.value}"
+        )
+
+    # Update task status
+    task.status = AccountGenStatusEnum.GENERATING
+    await db.commit()
+
+    # Create log entry
+    resume_log = TaskLog(
+        task_id=task.id,
+        level=LogLevelEnum.INFO,
+        message=f"タスク再開: {task.target_count - task.completed_count - task.failed_count}件のアカウント生成を再開します",
+        details={
+            "completed_count": task.completed_count,
+            "failed_count": task.failed_count,
+            "remaining_count": task.target_count - task.completed_count - task.failed_count
+        }
+    )
+    db.add(resume_log)
+    await db.commit()
+
+    # Audit log
+    await audit_log(
+        actor_user_id=1,
+        operation="resume_account_generation_task",
+        payload={
+            "task_id": task.id,
+        },
+        session=db,
+        ip_address=request.client.host if request.client else None
+    )
+
+    return {
+        "success": True,
+        "task_id": task.id,
+        "status": task.status.value,
+        "message": "Task resumed. Accounts will continue to be generated in the background."
     }
 
 
@@ -404,6 +495,7 @@ async def list_generated_accounts(
                 "platform": acc.platform.value,
                 "username": acc.username,
                 "email": acc.email,
+                "password": acc.password_encrypted,  # TODO: Decrypt if encrypted
                 "phone": acc.phone,
                 "proxy_used": acc.proxy_used,
                 "verification_status": acc.verification_status,
@@ -414,4 +506,106 @@ async def list_generated_accounts(
             }
             for acc in accounts
         ]
+    }
+
+
+@router.get("/account-generation/tasks/{task_id}/logs")
+async def get_task_logs(
+    task_id: int,
+    limit: int = 100,
+    since: Optional[int] = None,
+    level: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    タスクのリアルタイムログを取得
+    
+    - limit: 取得するログの最大数（デフォルト100）
+    - since: このLog ID以降のログのみ取得（ポーリング用）
+    - level: ログレベルフィルター（debug, info, warning, error, success）
+    """
+    result = await db.execute(
+        select(AccountGenerationTask).where(AccountGenerationTask.id == task_id)
+    )
+    task = result.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    query = select(TaskLog).where(TaskLog.task_id == task_id)
+
+    if since:
+        query = query.where(TaskLog.id > since)
+
+    if level:
+        try:
+            level_enum = LogLevelEnum[level.upper()]
+            query = query.where(TaskLog.level == level_enum)
+        except KeyError:
+            raise HTTPException(status_code=400, detail=f"Invalid level: {level}")
+
+    query = query.order_by(TaskLog.created_at.asc()).limit(limit)
+
+    result = await db.execute(query)
+    logs = result.scalars().all()
+
+    return {
+        "task_id": task_id,
+        "task_status": task.status.value,
+        "completed_count": task.completed_count,
+        "failed_count": task.failed_count,
+        "target_count": task.target_count,
+        "logs": [
+            {
+                "id": log.id,
+                "level": log.level.value,
+                "message": log.message,
+                "details": log.details,
+                "account_index": log.account_index,
+                "account_username": log.account_username,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            for log in logs
+        ]
+    }
+
+
+@router.get("/account-generation/tasks/{task_id}/progress")
+async def get_task_progress(
+    task_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """タスクの進捗情報を取得（軽量版、ポーリング用）"""
+    result = await db.execute(
+        select(AccountGenerationTask).where(AccountGenerationTask.id == task_id)
+    )
+    task = result.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    latest_log_result = await db.execute(
+        select(TaskLog)
+        .where(TaskLog.task_id == task_id)
+        .order_by(TaskLog.created_at.desc())
+        .limit(1)
+    )
+    latest_log = latest_log_result.scalar_one_or_none()
+
+    return {
+        "task_id": task_id,
+        "status": task.status.value,
+        "completed_count": task.completed_count,
+        "failed_count": task.failed_count,
+        "target_count": task.target_count,
+        "progress_percentage": round((task.completed_count + task.failed_count) / task.target_count * 100, 2) if task.target_count > 0 else 0,
+        "current_batch": task.current_batch,
+        "total_batches": (task.target_count + task.batch_size - 1) // task.batch_size,
+        "started_at": task.started_at.isoformat() if task.started_at else None,
+        "latest_log": {
+            "id": latest_log.id,
+            "level": latest_log.level.value,
+            "message": latest_log.message,
+            "created_at": latest_log.created_at.isoformat()
+        } if latest_log else None
     }
