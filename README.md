@@ -240,6 +240,253 @@ http://localhost:3006 にアクセス
 - `campaigns` - キャンペーン
 - `kill_switches` - Kill Switch
 
+## Browser-Use (AIブラウザ自動化)
+
+本システムは[browser-use](https://github.com/browser-use/browser-use)ライブラリを統合し、LLM駆動のブラウザ自動化を実現しています。
+
+### 概要
+
+Browser-Useは、AIエージェントがWebページを自律的にナビゲートし、要素を操作し、複雑なタスクを完了できるようにするライブラリです。HTMLを処理し、LLM駆動の判断を行うことでブラウザを操作します。
+
+### 設定
+
+#### 環境変数 (.env)
+
+```bash
+# LLM API Keys (どちらか一方必須)
+ANTHROPIC_API_KEY=sk-ant-xxxxx     # Anthropic Claude API
+OPENAI_API_KEY=sk-xxxxx            # OpenAI GPT-4 API
+
+# オプション: LLMモデル指定
+ANTHROPIC_MODEL=claude-sonnet-4-20250514  # デフォルト
+OPENAI_MODEL=gpt-4o                        # デフォルト
+
+# オプション: Browser Use Cloud
+BROWSER_USE_API_KEY=xxxxx          # クラウドモード使用時
+```
+
+#### 依存関係
+
+`backend/requirements.txt`に以下が含まれています:
+
+```
+browser-use>=0.10.0
+cdp-use>=1.4.4
+bubus>=1.5.6
+pillow>=11.2.1
+markdownify>=1.2.0
+```
+
+### 使い方
+
+#### 1. Web UI (推奨)
+
+1. ダッシュボード (http://localhost:3006) にアクセス
+2. 「ブラウザアクション (AI自動化)」をクリック
+3. タスク設定:
+   - プラットフォーム選択 (YouTube, X, Instagram, TikTok)
+   - アカウント選択 (オプション)
+   - 自然言語でタスクを入力
+   - ヘッドレスモード/クラウドモードを選択
+4. 「タスクを実行」をクリック
+
+#### 2. REST API
+
+**タスク実行:**
+
+```bash
+curl -X POST http://localhost:8006/browser-actions/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task": "YouTubeで「AI tutorial」を検索して、上位3件の動画にいいねする",
+    "platform": "youtube",
+    "account_id": 1,
+    "use_generated_account": false,
+    "browser_config": {
+      "headless": true
+    },
+    "use_cloud": false
+  }'
+```
+
+**プラットフォームログイン:**
+
+```bash
+curl -X POST "http://localhost:8006/browser-actions/login?platform=youtube&account_id=1&headless=true"
+```
+
+**タスク例の取得:**
+
+```bash
+curl http://localhost:8006/browser-actions/examples
+```
+
+#### 3. Python コード
+
+```python
+from app.services.browser_agent import browser_agent
+
+# タスク実行
+result = await browser_agent.execute_task(
+    task="YouTubeで「Python tutorial」を検索して、上位5件にいいねする",
+    platform="youtube",
+    account_credentials={
+        "username": "myusername",
+        "email": "my@email.com",
+        "password": "mypassword"
+    },
+    browser_config={
+        "headless": True,
+        "proxy": "http://proxy:8080"  # オプション
+    },
+    llm_provider="anthropic",  # または "openai"
+    max_steps=50
+)
+
+# 結果
+print(result["success"])        # True/False
+print(result["result"])         # 実行結果
+print(result["actions_taken"])  # 実行されたアクション
+print(result["execution_time"]) # 実行時間
+print(result["screenshots"])    # スクリーンショット (base64)
+
+# 便利なメソッド
+await browser_agent.login_to_platform("youtube", "user", "email", "pass")
+await browser_agent.post_content("x", "Hello World!")
+await browser_agent.like_content("instagram", "https://instagram.com/p/xxx")
+await browser_agent.follow_user("tiktok", "username")
+await browser_agent.comment_on_content("youtube", "url", "Great video!")
+await browser_agent.search_and_interact("x", "AI news", "like", count=5)
+await browser_agent.extract_data("youtube", "url", "comments", limit=10)
+```
+
+### タスク例
+
+#### YouTube
+```
+"YouTubeで「AI tutorial」を検索して、上位5件の動画にいいねする"
+"最新の動画10件のコメントを取得する"
+"@techchannelのチャンネルを登録する"
+"「Machine Learning入門」というタイトルで動画をアップロードする"
+```
+
+#### X (Twitter)
+```
+"「AI」についてツイートする"
+"タイムラインの最新5件にいいねする"
+"@user1, @user2, @user3をフォローする"
+"「テクノロジー」で検索して、上位3件をリツイートする"
+```
+
+#### Instagram
+```
+"フィードの最新10件の投稿にいいねする"
+"#旅行のハッシュタグを検索して、上位5件にいいねする"
+"@username の最新投稿にコメントする"
+"新しい写真を投稿する (キャプション: 美しい夕日)"
+```
+
+#### TikTok
+```
+"For Youページの上位10件の動画にいいねする"
+"料理動画を投稿しているクリエイターをフォローする"
+"「面白い猫」で検索して、上位3件にいいねする"
+```
+
+### 設定オプション
+
+#### browser_config
+
+| オプション | 型 | デフォルト | 説明 |
+|-----------|------|---------|------|
+| `headless` | bool | true | ヘッドレスモード (UIなし) |
+| `proxy` | string | null | プロキシURL |
+| `user_agent` | string | null | カスタムUser-Agent |
+| `minimum_wait_page_load_time` | float | 0.5 | ページ読み込み待機時間 |
+| `wait_between_actions` | float | 0.3 | アクション間の待機時間 |
+| `disable_security` | bool | false | セキュリティ機能の無効化 |
+
+#### use_cloud
+
+`true`に設定すると、Browser Use Cloudを使用します:
+- ステルス性向上 (bot検出回避)
+- スケーラビリティ
+- 別途 `BROWSER_USE_API_KEY` が必要
+
+### レスポンス形式
+
+```json
+{
+  "success": true,
+  "result": "タスクの実行結果の説明",
+  "actions_taken": [
+    "GoToUrl",
+    "InputText",
+    "Click",
+    "Scroll"
+  ],
+  "screenshots": ["base64_encoded_image..."],
+  "execution_time": 45.2,
+  "error": null,
+  "total_steps": 12
+}
+```
+
+### エラーハンドリング
+
+| エラー | 原因 | 対処法 |
+|-------|------|--------|
+| `Invalid platform` | サポートされていないプラットフォーム | youtube, x, instagram, tiktok のいずれかを指定 |
+| `Account not found` | 指定されたアカウントIDが存在しない | 正しいaccount_idを指定 |
+| `Platform mismatch` | アカウントのプラットフォームが一致しない | 正しいplatformを指定 |
+| `CAPTCHA detected` | CAPTCHAが表示された | クラウドモードを使用、または手動で解決 |
+| `Rate limited` | レート制限に達した | 実行間隔を空ける |
+
+### ベストプラクティス
+
+1. **レート制限を守る**: 過度な自動化はアカウント停止の原因になります
+2. **ヘッドレスモードを使用**: 本番環境では `headless: true` を推奨
+3. **プロキシを使用**: IPブロックを避けるためにプロキシローテーションを活用
+4. **適切な待機時間**: `wait_between_actions` を調整してより人間らしい動作に
+5. **クラウドモードの検討**: 大規模運用時はBrowser Use Cloudを使用
+6. **エラーログの監視**: 失敗したタスクを定期的に確認
+
+### トラブルシューティング
+
+#### ブラウザが起動しない
+
+```bash
+# Playwrightのブラウザをインストール
+pip install playwright
+playwright install chromium
+```
+
+#### LLM APIエラー
+
+```bash
+# APIキーの確認
+echo $ANTHROPIC_API_KEY
+echo $OPENAI_API_KEY
+```
+
+#### タイムアウトエラー
+
+```python
+# max_stepsを増やす
+result = await browser_agent.execute_task(
+    task="...",
+    platform="youtube",
+    max_steps=100  # デフォルト: 50
+)
+```
+
+#### CAPTCHA検出
+
+- クラウドモードを使用: `use_cloud: true`
+- 実行頻度を下げる
+- プロキシを変更する
+- 手動でCAPTCHAを解決後に再試行
+
 ## 監視しきい値設定
 
 16分類の監視項目は`observability_json`に設定:
@@ -677,6 +924,14 @@ Private - 内部使用のみ
 問題や質問がある場合は、プロジェクト管理者に連絡してください。
 
 ## バージョン履歴
+
+- v2.0.0 (2025-12-02)
+  - **Browser-Use統合**: LLM駆動のブラウザ自動化
+  - 自然言語でSNS操作が可能に
+  - ブラウザアクションUI追加
+  - OAuth不要のブラウザベース認証
+  - マルチLLMサポート (Anthropic/OpenAI)
+  - Browser Use Cloudサポート
 
 - v1.3.0 (2025-01-05)
   - 初期リリース

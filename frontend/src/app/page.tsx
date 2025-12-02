@@ -138,6 +138,12 @@ export default function Dashboard() {
               >
                 アカウント自動生成
               </a>
+              <a
+                href="/browser-actions"
+                className="block w-full px-4 py-2 text-sm font-medium text-center border rounded-md hover:bg-accent bg-green-50 border-green-200"
+              >
+                ブラウザアクション (AI自動化)
+              </a>
             </CardContent>
           </Card>
 
@@ -248,6 +254,13 @@ export default function Dashboard() {
               >
                 <div className="font-semibold">データエクスポート</div>
                 <div className="text-xs text-muted-foreground">CSV/JSON出力</div>
+              </a>
+              <a
+                href="/browser-actions"
+                className="block px-4 py-2 text-sm border rounded-md hover:bg-accent bg-green-50"
+              >
+                <div className="font-semibold">ブラウザアクション</div>
+                <div className="text-xs text-muted-foreground">AI駆動ブラウザ自動化</div>
               </a>
             </CardContent>
           </Card>
