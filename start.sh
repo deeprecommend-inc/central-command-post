@@ -46,12 +46,18 @@ check_dependencies() {
     fi
     print_success "Docker found"
 
-    # Check Docker Compose
-    if ! command -v docker-compose &> /dev/null; then
+    # Check Docker Compose (v2 plugin or standalone)
+    if docker compose version &> /dev/null; then
+        DOCKER_COMPOSE="docker compose"
+        print_success "Docker Compose (v2 plugin) found"
+    elif command -v docker-compose &> /dev/null; then
+        DOCKER_COMPOSE="docker-compose"
+        print_success "Docker Compose (standalone) found"
+    else
         print_error "Docker Compose is not installed. Please install Docker Compose first."
         exit 1
     fi
-    print_success "Docker Compose found"
+    export DOCKER_COMPOSE
 
     # Check if Docker daemon is running
     if ! docker info &> /dev/null; then
@@ -178,9 +184,9 @@ stop_existing_containers() {
     print_info "Checking for existing containers..."
 
     # Check for this project's containers
-    if docker-compose ps -q 2>/dev/null | grep -q .; then
+    if $DOCKER_COMPOSE ps -q 2>/dev/null | grep -q .; then
         print_warning "Stopping existing SNS Orchestrator containers..."
-        docker-compose down --remove-orphans
+        $DOCKER_COMPOSE down --remove-orphans
         print_success "Stopped existing containers"
     fi
 
@@ -206,7 +212,7 @@ start_services() {
     print_info "Starting services with Docker Compose..."
 
     # Build and start services
-    if docker-compose up -d --build 2>&1 | tee /tmp/docker-compose-start.log; then
+    if $DOCKER_COMPOSE up -d --build 2>&1 | tee /tmp/docker-compose-start.log; then
         print_success "Services started successfully"
     else
         print_error "Failed to start services"
@@ -220,7 +226,7 @@ start_services() {
         echo "  3. Insufficient resources - Check Docker resource limits"
         echo ""
         print_info "To debug further:"
-        echo "  docker-compose logs"
+        echo "  $DOCKER_COMPOSE logs"
         echo "  docker ps -a"
         exit 1
     fi
@@ -234,7 +240,7 @@ wait_for_services() {
     # Wait for PostgreSQL
     print_info "Waiting for PostgreSQL..."
     for i in {1..30}; do
-        if docker-compose exec -T postgres pg_isready -U sns_user &> /dev/null; then
+        if $DOCKER_COMPOSE exec -T postgres pg_isready -U sns_user &> /dev/null; then
             print_success "PostgreSQL is ready"
             break
         fi
@@ -248,7 +254,7 @@ wait_for_services() {
     # Wait for Redis
     print_info "Waiting for Redis..."
     for i in {1..30}; do
-        if docker-compose exec -T redis redis-cli ping &> /dev/null; then
+        if $DOCKER_COMPOSE exec -T redis redis-cli ping &> /dev/null; then
             print_success "Redis is ready"
             break
         fi
@@ -268,7 +274,7 @@ wait_for_services() {
         fi
         if [ $i -eq 60 ]; then
             print_error "Backend API failed to start in time"
-            print_info "Check logs with: docker-compose logs backend"
+            print_info "Check logs with: $DOCKER_COMPOSE logs backend"
             exit 1
         fi
         sleep 1
@@ -281,7 +287,7 @@ initialize_database() {
     print_info "Initializing database..."
 
     # Check if database is already initialized
-    DB_INITIALIZED=$(docker-compose exec -T postgres psql -U sns_user -d sns_orchestrator -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null || echo "0")
+    DB_INITIALIZED=$($DOCKER_COMPOSE exec -T postgres psql -U sns_user -d sns_orchestrator -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null || echo "0")
 
     if [ "$DB_INITIALIZED" -gt "0" ]; then
         print_warning "Database already initialized (found $DB_INITIALIZED tables)"
@@ -294,7 +300,7 @@ initialize_database() {
         fi
     fi
 
-    docker-compose exec -T backend python -c "
+    $DOCKER_COMPOSE exec -T backend python -c "
 from app.models.database import init_db
 import asyncio
 asyncio.run(init_db())
@@ -304,7 +310,7 @@ print('Database initialized successfully')
     if [ $? -eq 0 ]; then
         print_success "Database initialized"
     else
-        print_warning "Database initialization may have issues. Check logs with: docker-compose logs backend"
+        print_warning "Database initialization may have issues. Check logs with: $DOCKER_COMPOSE logs backend"
     fi
 
     echo ""
@@ -324,15 +330,15 @@ display_status() {
     echo ""
 
     echo -e "${BLUE}Container Status:${NC}"
-    docker-compose ps
+    $DOCKER_COMPOSE ps
     echo ""
 
     echo -e "${YELLOW}Useful Commands:${NC}"
-    echo "  View logs:           docker-compose logs -f"
-    echo "  View backend logs:   docker-compose logs -f backend"
-    echo "  View frontend logs:  docker-compose logs -f frontend"
-    echo "  Stop services:       docker-compose down"
-    echo "  Restart services:    docker-compose restart"
+    echo "  View logs:           $DOCKER_COMPOSE logs -f"
+    echo "  View backend logs:   $DOCKER_COMPOSE logs -f backend"
+    echo "  View frontend logs:  $DOCKER_COMPOSE logs -f frontend"
+    echo "  Stop services:       $DOCKER_COMPOSE down"
+    echo "  Restart services:    $DOCKER_COMPOSE restart"
     echo ""
 
     echo -e "${YELLOW}Next Steps:${NC}"
@@ -345,7 +351,7 @@ display_status() {
 show_logs() {
     print_info "Showing logs (Ctrl+C to exit)..."
     echo ""
-    docker-compose logs -f
+    $DOCKER_COMPOSE logs -f
 }
 
 # Main execution

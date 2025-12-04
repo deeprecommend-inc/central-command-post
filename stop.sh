@@ -35,11 +35,23 @@ print_info() {
     echo -e "${BLUE}ℹ $1${NC}"
 }
 
+# Detect Docker Compose command
+detect_docker_compose() {
+    if docker compose version &> /dev/null; then
+        DOCKER_COMPOSE="docker compose"
+    elif command -v docker-compose &> /dev/null; then
+        DOCKER_COMPOSE="docker-compose"
+    else
+        print_error "Docker Compose is not installed."
+        exit 1
+    fi
+}
+
 stop_services() {
     print_info "Stopping services..."
 
-    if docker-compose ps -q 2>/dev/null | grep -q .; then
-        docker-compose down
+    if $DOCKER_COMPOSE ps -q 2>/dev/null | grep -q .; then
+        $DOCKER_COMPOSE down
 
         if [ $? -eq 0 ]; then
             print_success "Services stopped successfully"
@@ -61,7 +73,7 @@ remove_volumes() {
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         print_info "Removing volumes..."
-        docker-compose down -v
+        $DOCKER_COMPOSE down -v
 
         if [ $? -eq 0 ]; then
             print_success "Volumes removed"
@@ -83,7 +95,7 @@ clean_all() {
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         print_info "Cleaning all resources..."
-        docker-compose down -v --remove-orphans
+        $DOCKER_COMPOSE down -v --remove-orphans
 
         if [ $? -eq 0 ]; then
             print_success "All resources cleaned"
@@ -101,12 +113,15 @@ clean_all() {
 show_status() {
     print_info "Current status:"
     echo ""
-    docker-compose ps
+    $DOCKER_COMPOSE ps
     echo ""
 }
 
 main() {
     print_header
+
+    # Detect Docker Compose
+    detect_docker_compose
 
     # Parse command line arguments
     REMOVE_VOLUMES=false

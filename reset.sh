@@ -35,6 +35,18 @@ print_info() {
     echo -e "${BLUE}ℹ $1${NC}"
 }
 
+# Detect Docker Compose command
+detect_docker_compose() {
+    if docker compose version &> /dev/null; then
+        DOCKER_COMPOSE="docker compose"
+    elif command -v docker-compose &> /dev/null; then
+        DOCKER_COMPOSE="docker-compose"
+    else
+        print_error "Docker Compose is not installed."
+        exit 1
+    fi
+}
+
 confirm_reset() {
     echo -e "${RED}WARNING: This will:${NC}"
     echo "  - Stop all services"
@@ -53,6 +65,10 @@ confirm_reset() {
 
 reset_system() {
     print_header
+
+    # Detect Docker Compose
+    detect_docker_compose
+
     confirm_reset
 
     print_info "Starting reset process..."
@@ -60,7 +76,7 @@ reset_system() {
 
     # Stop all services
     print_info "Stopping services..."
-    docker-compose down -v --remove-orphans
+    $DOCKER_COMPOSE down -v --remove-orphans
     print_success "Services stopped and volumes removed"
 
     # Clean up audit logs

@@ -38,6 +38,18 @@ show_usage() {
     echo "  $0 frontend -n 50     Show last 50 lines from frontend"
 }
 
+# Detect Docker Compose command
+detect_docker_compose() {
+    if docker compose version &> /dev/null; then
+        DOCKER_COMPOSE="docker compose"
+    elif command -v docker-compose &> /dev/null; then
+        DOCKER_COMPOSE="docker-compose"
+    else
+        echo "Docker Compose is not installed."
+        exit 1
+    fi
+}
+
 main() {
     SERVICE="all"
     FOLLOW=""
@@ -73,11 +85,14 @@ main() {
 
     print_header
 
+    # Detect Docker Compose
+    detect_docker_compose
+
     # Build docker-compose logs command
     if [ "$SERVICE" = "all" ]; then
-        docker-compose logs --tail="$TAIL" $FOLLOW
+        $DOCKER_COMPOSE logs --tail="$TAIL" $FOLLOW
     else
-        docker-compose logs --tail="$TAIL" $FOLLOW "$SERVICE"
+        $DOCKER_COMPOSE logs --tail="$TAIL" $FOLLOW "$SERVICE"
     fi
 }
 
