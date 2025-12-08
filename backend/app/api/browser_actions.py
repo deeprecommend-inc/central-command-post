@@ -36,6 +36,7 @@ class BrowserActionResponse(BaseModel):
     success: bool
     result: Optional[str]
     actions_taken: List[str]
+    execution_log: List[str]
     screenshots: List[str]
     execution_time: float
     error: Optional[str]
@@ -154,6 +155,9 @@ async def execute_browser_action(
             "platform": request.platform,
             "account_id": request.account_id,
             "success": result["success"],
+            "actions_taken": result.get("actions_taken", []),
+            "execution_log": result.get("execution_log", []),
+            "error": result.get("error"),
         },
         session=db,
     )

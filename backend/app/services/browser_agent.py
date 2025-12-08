@@ -233,15 +233,18 @@ class BrowserAgentService:
         """
         start_time = datetime.now()
         browser_session = None
+        execution_log: List[str] = []
 
         try:
             # Build context-aware task
             full_task = self._build_task_with_context(
                 task, platform, account_credentials
             )
+            execution_log.append(f"Task started: {task} on {platform}")
 
             # Get LLM
             llm = await self._get_llm(llm_provider)
+            execution_log.append(f"LLM provider: {llm_provider or 'auto'}")
 
             # Create browser profile
             browser_profile = self._create_browser_profile(
@@ -249,9 +252,13 @@ class BrowserAgentService:
                 proxy=proxy,
                 user_agent=user_agent,
             )
+            execution_log.append(
+                f"Browser profile created (headless={browser_profile.headless}, proxy={'yes' if proxy else 'no'})"
+            )
 
             # Create browser session
             browser_session = BrowserSession(browser_profile=browser_profile)
+            execution_log.append("Browser session initialized")
 
             # Create sensitive data mapping for credentials
             sensitive_data = None
@@ -274,20 +281,42 @@ class BrowserAgentService:
 
             # Run the agent
             history: AgentHistoryList = await agent.run(max_steps=max_steps)
+            execution_log.append(f"Agent run completed with {len(history.history)} steps")
 
             # Extract results from history
             actions_taken = []
             screenshots = []
             final_result = None
+            step_logs: List[str] = []
 
-            for step in history.history:
+            for idx, step in enumerate(history.history, 1):
+                log_parts = [f"Step {idx}"]
                 if step.model_output and step.model_output.action:
                     for action in step.model_output.action:
                         action_name = action.__class__.__name__
                         actions_taken.append(action_name)
+                    recent_actions = actions_taken[-len(step.model_output.action):]
+                    log_parts.append(f"Actions: {', '.join(recent_actions)}")
+                else:
+                    log_parts.append("Actions: none")
 
-                if step.state and step.state.screenshot:
-                    screenshots.append(step.state.screenshot)
+                if step.state:
+                    screenshot = self._extract_screenshot(step.state)
+                    if screenshot:
+                        screenshots.append(screenshot)
+                        log_parts.append("Screenshot captured")
+
+                    state_summary = getattr(step.state, "state_summary", None) or getattr(
+                        step.state, "description", None
+                    )
+                    if state_summary:
+                        log_parts.append(f"State: {state_summary}")
+
+                step_error = getattr(step, "error", None)
+                if step_error:
+                    log_parts.append(f"Error: {step_error}")
+
+                step_logs.append(" | ".join(log_parts))
 
             # Get final result
             if history.final_result():
@@ -298,6 +327,7 @@ class BrowserAgentService:
                     final_result = last_step.model_output.current_state.next_goal
 
             execution_time = (datetime.now() - start_time).total_seconds()
+            execution_log.extend(step_logs)
 
             return {
                 "success": not history.is_stuck() and not history.has_errors(),
@@ -306,12 +336,14 @@ class BrowserAgentService:
                 "screenshots": screenshots[-5:] if screenshots else [],  # Last 5 screenshots
                 "execution_time": execution_time,
                 "error": None,
+                "execution_log": execution_log,
                 "total_steps": len(history.history),
             }
 
         except Exception as e:
             logger.error(f"Browser agent task failed: {e}", exc_info=True)
             execution_time = (datetime.now() - start_time).total_seconds()
+            execution_log.append(f"Failure: {e}")
             return {
                 "success": False,
                 "result": None,
@@ -319,6 +351,7 @@ class BrowserAgentService:
                 "screenshots": [],
                 "execution_time": execution_time,
                 "error": str(e),
+                "execution_log": execution_log,
             }
         finally:
             # Clean up browser session
@@ -327,6 +360,35 @@ class BrowserAgentService:
                     await browser_session.close()
                 except Exception as e:
                     logger.warning(f"Failed to close browser session: {e}")
+
+    def _extract_screenshot(self, state: Any) -> Optional[str]:
+        """
+        Safely extract a screenshot from a step state.
+        Handles multiple possible attribute names and raw bytes.
+        """
+        candidates = [
+            "screenshot",
+            "screenshot_base64",
+            "screenshot_png",
+            "image_base64",
+            "image",
+        ]
+
+        for attr in candidates:
+            value = getattr(state, attr, None)
+            if not value:
+                continue
+
+            if isinstance(value, bytes):
+                try:
+                    return base64.b64encode(value).decode("utf-8")
+                except Exception:
+                    continue
+
+            if isinstance(value, str):
+                return value
+
+        return None
 
     def _build_task_with_context(
         self,

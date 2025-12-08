@@ -14,6 +14,7 @@ interface BrowserActionResult {
   success: boolean;
   result: string | null;
   actions_taken: string[];
+  execution_log: string[];
   screenshots: string[];
   execution_time: number;
   error: string | null;
@@ -109,6 +110,7 @@ export default function BrowserActionsPage() {
         success: false,
         result: null,
         actions_taken: [],
+        execution_log: [],
         screenshots: [],
         execution_time: 0,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -334,6 +336,20 @@ export default function BrowserActionsPage() {
                       <li key={index}>{action}</li>
                     ))}
                   </ul>
+                </div>
+              )}
+
+              {/* Execution Log */}
+              {result.execution_log.length > 0 && (
+                <div>
+                  <h4 className="font-medium mb-1">実行ログ</h4>
+                  <div className="bg-muted p-3 rounded text-sm space-y-1 max-h-60 overflow-y-auto">
+                    {result.execution_log.map((line, index) => (
+                      <p key={index} className="font-mono text-xs">
+                        {line}
+                      </p>
+                    ))}
+                  </div>
                 </div>
               )}
 
