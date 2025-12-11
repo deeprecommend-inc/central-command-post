@@ -6,8 +6,10 @@ This module integrates browser-use library for AI-driven browser automation.
 """
 
 import asyncio
+import asyncio.subprocess as aio_subprocess
 import logging
 import base64
+import sys
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
@@ -62,6 +64,10 @@ class BrowserAgentService:
             minimum_wait_page_load_time=0.5,
             wait_between_actions=0.3,
         )
+        self._playwright_install_lock = asyncio.Lock()
+        self._playwright_ready = False
+        self._playwright_deps_lock = asyncio.Lock()
+        self._playwright_deps_ready = False
 
     async def _get_llm_settings_from_db(self, provider: str = None) -> Optional[Dict[str, Any]]:
         """Get LLM settings from database"""
@@ -279,8 +285,12 @@ class BrowserAgentService:
                 use_vision=True,
             )
 
-            # Run the agent
-            history: AgentHistoryList = await agent.run(max_steps=max_steps)
+            # Run the agent with auto-install retry for Playwright browsers
+            history: AgentHistoryList = await self._run_agent_with_playwright_retry(
+                agent,
+                max_steps=max_steps,
+                execution_log=execution_log,
+            )
             execution_log.append(f"Agent run completed with {len(history.history)} steps")
 
             # Extract results from history
@@ -343,14 +353,15 @@ class BrowserAgentService:
         except Exception as e:
             logger.error(f"Browser agent task failed: {e}", exc_info=True)
             execution_time = (datetime.now() - start_time).total_seconds()
-            execution_log.append(f"Failure: {e}")
+            error_message = str(e).strip() or e.__class__.__name__
+            execution_log.append(f"Failure: {error_message}")
             return {
                 "success": False,
                 "result": None,
                 "actions_taken": [],
                 "screenshots": [],
                 "execution_time": execution_time,
-                "error": str(e),
+                "error": error_message,
                 "execution_log": execution_log,
             }
         finally:
@@ -360,6 +371,129 @@ class BrowserAgentService:
                     await browser_session.close()
                 except Exception as e:
                     logger.warning(f"Failed to close browser session: {e}")
+
+    async def _run_agent_with_playwright_retry(
+        self,
+        agent: Agent,
+        max_steps: int,
+        execution_log: List[str],
+    ) -> AgentHistoryList:
+        """
+        Run the browser-use agent and auto-install Playwright browsers when missing.
+        """
+        retry_triggered = False
+        deps_retry_triggered = False
+
+        while True:
+            try:
+                return await agent.run(max_steps=max_steps)
+            except FileNotFoundError as error:
+                if retry_triggered or not self._should_retry_playwright_install(error):
+                    raise
+
+                retry_triggered = True
+                execution_log.append(
+                    "Playwright browser binaries not found. Installing chromium (one-time setup)..."
+                )
+                await self._install_playwright_browsers(execution_log)
+                execution_log.append("Retrying task with freshly installed Playwright browsers.")
+            except Exception as error:
+                if deps_retry_triggered or not self._should_install_playwright_deps(error):
+                    raise
+
+                deps_retry_triggered = True
+                execution_log.append(
+                    "Playwright runtime dependencies missing. Installing system packages (one-time setup)..."
+                )
+                await self._install_playwright_dependencies(execution_log)
+                execution_log.append("Retrying task after installing Playwright dependencies.")
+
+    async def _install_playwright_browsers(self, execution_log: List[str]) -> None:
+        """
+        Install Playwright chromium browser binaries if they are missing.
+        """
+        async with self._playwright_install_lock:
+            if self._playwright_ready:
+                execution_log.append("Playwright chromium browser already installed, skipping setup.")
+                return
+
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "playwright",
+                "install",
+                "chromium",
+                stdout=aio_subprocess.PIPE,
+                stderr=aio_subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode != 0:
+                message = stderr.decode().strip() or stdout.decode().strip() or "unknown error"
+                execution_log.append(f"Playwright install failed: {message}")
+                raise RuntimeError(f"Playwright install failed: {message}")
+
+            self._playwright_ready = True
+            execution_log.append("Playwright chromium browser installed successfully.")
+
+    async def _install_playwright_dependencies(self, execution_log: List[str]) -> None:
+        """
+        Install system dependencies required by Playwright (chromium).
+        """
+        async with self._playwright_deps_lock:
+            if self._playwright_deps_ready:
+                execution_log.append("Playwright system dependencies already installed, skipping setup.")
+                return
+
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "playwright",
+                "install-deps",
+                "chromium",
+                stdout=aio_subprocess.PIPE,
+                stderr=aio_subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode != 0:
+                message = stderr.decode().strip() or stdout.decode().strip() or "unknown error"
+                execution_log.append(f"Playwright dependency install failed: {message}")
+                raise RuntimeError(f"Playwright dependency install failed: {message}")
+
+            self._playwright_deps_ready = True
+            execution_log.append("Playwright system dependencies installed successfully.")
+
+    def _should_retry_playwright_install(self, error: Exception) -> bool:
+        """
+        Determine if a FileNotFoundError likely comes from missing Playwright browsers.
+        """
+        if not isinstance(error, FileNotFoundError):
+            return False
+
+        message = str(error).lower()
+        keywords = ("playwright", "ms-playwright", "chromium", "chrome")
+        return any(keyword in message for keyword in keywords) or not getattr(error, "filename", None)
+
+    def _should_install_playwright_deps(self, error: Exception) -> bool:
+        """
+        Determine if the exception indicates missing Playwright system dependencies.
+        """
+        message = str(error).lower()
+        if not message:
+            return False
+
+        keywords = (
+            "queueshutdown",
+            "crashpad_handler",
+            "libx11",
+            "libxcb",
+            "libnss3",
+            "cannot open shared object file",
+            "missing libraries",
+            "renderer process crashed",
+        )
+        return any(keyword in message for keyword in keywords)
 
     def _extract_screenshot(self, state: Any) -> Optional[str]:
         """

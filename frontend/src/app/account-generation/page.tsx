@@ -48,6 +48,25 @@ const PLATFORMS = [
   { id: 'tiktok', name: 'TikTok', logo: '/tiktok.png' },
 ];
 
+const RECOMMENDED_EMAIL_DOMAINS = [
+  { value: 'temp-mail.com', label: 'Temp Mail', description: '最も安定した一時メール' },
+  { value: 'guerrillamail.com', label: 'Guerrilla Mail', description: '即座に受信確認可能' },
+  { value: 'mail7.io', label: 'Mail7', description: 'API提供あり' },
+  { value: 'custom', label: 'カスタム', description: '任意のドメインを入力' },
+];
+
+const INITIAL_FORM_DATA = {
+  platform: 'youtube',
+  target_count: 10,
+  execution_mode: 'selenium',
+  username_pattern: 'user_{}',
+  email_domain: 'temp-mail.com',
+  phone_provider: '',
+  proxy_list: '',
+  use_residential_proxy: true,
+  headless: true,
+};
+
 export default function AccountGenerationPage() {
   const [tasks, setTasks] = useState<GenerationTask[]>([]);
   const [accounts, setAccounts] = useState<GeneratedAccount[]>([]);
@@ -57,22 +76,22 @@ export default function AccountGenerationPage() {
   const [selectedTaskForLogs, setSelectedTaskForLogs] = useState<number | null>(null);
 
   // フォーム状態
-  const [formData, setFormData] = useState({
-    platform: 'youtube',
-    target_count: 10,
-    execution_mode: 'selenium',
-    username_pattern: 'user_{}',
-    email_domain: 'temp-mail.com',
-    phone_provider: '',
-    proxy_list: '',
-    use_residential_proxy: true,
-    headless: true,
-  });
+  const [formData, setFormData] = useState({ ...INITIAL_FORM_DATA });
+  const [selectedEmailDomainOption, setSelectedEmailDomainOption] = useState(
+    INITIAL_FORM_DATA.email_domain
+  );
+  const [customEmailDomain, setCustomEmailDomain] = useState('');
 
   useEffect(() => {
     fetchTasks();
     fetchAccounts();
   }, []);
+
+  const resetForm = () => {
+    setFormData({ ...INITIAL_FORM_DATA });
+    setSelectedEmailDomainOption(INITIAL_FORM_DATA.email_domain);
+    setCustomEmailDomain('');
+  };
 
   const fetchTasks = async () => {
     try {
@@ -95,6 +114,31 @@ export default function AccountGenerationPage() {
     } catch (error) {
       console.error('Failed to fetch accounts:', error);
     }
+  };
+
+  const handleEmailDomainSelect = (value: string) => {
+    setSelectedEmailDomainOption(value);
+
+    if (value === 'custom') {
+      setFormData((prev) => ({
+        ...prev,
+        email_domain: customEmailDomain,
+      }));
+    } else {
+      setFormData((prev) => ({
+        ...prev,
+        email_domain: value,
+      }));
+    }
+  };
+
+  const handleCustomEmailDomainChange = (value: string) => {
+    setCustomEmailDomain(value);
+    setSelectedEmailDomainOption('custom');
+    setFormData((prev) => ({
+      ...prev,
+      email_domain: value,
+    }));
   };
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -129,17 +173,7 @@ export default function AccountGenerationPage() {
       if (data.success) {
         alert('アカウント生成タスクを作成しました！');
         setShowCreateForm(false);
-        setFormData({
-          platform: 'youtube',
-          target_count: 10,
-          execution_mode: 'selenium',
-          username_pattern: 'user_{}',
-          email_domain: 'temp-mail.com',
-          phone_provider: '',
-          proxy_list: '',
-          use_residential_proxy: true,
-          headless: true,
-        });
+        resetForm();
         fetchTasks();
       } else {
         alert('エラー: ' + (data.error || 'タスクの作成に失敗しました'));
@@ -651,16 +685,48 @@ export default function AccountGenerationPage() {
                   {/* メールドメイン */}
                   <div>
                     <label className="block text-sm font-medium mb-2">メールドメイン</label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                      {RECOMMENDED_EMAIL_DOMAINS.map((domain) => {
+                        const isSelected = selectedEmailDomainOption === domain.value;
+                        const isCustom = domain.value === 'custom';
+                        const preview = isCustom
+                          ? customEmailDomain || '任意のドメインを入力'
+                          : domain.value;
+
+                        return (
+                          <button
+                            key={domain.value}
+                            type="button"
+                            onClick={() => handleEmailDomainSelect(domain.value)}
+                            className={`p-4 border rounded-lg text-left transition-colors ${
+                              isSelected ? 'border-primary bg-accent' : 'border-border hover:border-primary/50'
+                            }`}
+                          >
+                            <div className="font-medium text-sm mb-1 flex items-center justify-between">
+                              <span>{domain.label}</span>
+                              {isSelected && <span className="text-xs text-primary">選択中</span>}
+                            </div>
+                            <div className="text-xs text-muted-foreground">{domain.description}</div>
+                            <div className="text-xs font-mono mt-2 text-muted-foreground break-all">
+                              {preview}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
                     <input
                       type="text"
                       value={formData.email_domain}
-                      onChange={(e) => setFormData({ ...formData, email_domain: e.target.value })}
-                      className="w-full px-4 py-2 border rounded-md"
+                      onChange={(e) => handleCustomEmailDomainChange(e.target.value)}
+                      className="w-full px-4 py-2 border rounded-md disabled:bg-muted/50"
                       placeholder="例: temp-mail.com, guerrillamail.com"
+                      disabled={selectedEmailDomainOption !== 'custom'}
                       required
                     />
                     <p className="text-xs text-muted-foreground mt-1">
-                      一時メールサービスのドメインを推奨
+                      {selectedEmailDomainOption === 'custom'
+                        ? 'DNSやMXが利用可能な任意のドメインを入力できます'
+                        : '推奨ドメインから選択中。自由入力する場合は「カスタム」を選択してください'}
                     </p>
                   </div>
 
@@ -748,17 +814,7 @@ export default function AccountGenerationPage() {
                       type="button"
                       onClick={() => {
                         setShowCreateForm(false);
-                        setFormData({
-                          platform: 'youtube',
-                          target_count: 10,
-                          execution_mode: 'selenium',
-                          username_pattern: 'user_{}',
-                          email_domain: 'temp-mail.com',
-                          phone_provider: '',
-                          proxy_list: '',
-                          use_residential_proxy: true,
-                          headless: true,
-                        });
+                        resetForm();
                       }}
                       className="px-4 py-2 border rounded-md hover:bg-accent"
                     >

@@ -103,8 +103,9 @@ class AccountGeneratorService:
         """
 
         try:
-            # 1. ユーザー名・メール・パスワード生成
-            username = self._generate_username(task.generation_config, index)
+            profile_name = gmail_generator.generate_random_name()
+            birthdate = gmail_generator.generate_random_birthdate()
+            username = self._generate_username(task.generation_config, index, profile_name)
             email = self._generate_email(task.generation_config, username)
             password = self._generate_password()
 
@@ -146,7 +147,12 @@ class AccountGeneratorService:
                 mulogin_profile_name=None,
                 browser_fingerprint={},
                 verification_status="verified",
-                status=StatusEnum.ACTIVE
+                status=StatusEnum.ACTIVE,
+                generation_metadata={
+                    "first_name": profile_name["first_name"],
+                    "last_name": profile_name["last_name"],
+                    "birthdate": birthdate,
+                },
             )
 
             session.add(account)
@@ -490,19 +496,55 @@ class AccountGeneratorService:
             print(f"TikTok registration error: {e}")
             return False
 
-    def _generate_username(self, config: Dict[str, Any], index: int) -> str:
-        """ユーザー名生成"""
-        pattern = config.get("username_pattern", "user_{}")
+    def _generate_username(self, config: Dict[str, Any], index: int, profile: Dict[str, str]) -> str:
+        """名前情報を活用してよりランダムなユーザー名を生成"""
+        _ = config  # 互換性保持（将来の設定用）
+        first = profile["first_name"].lower()
+        last = profile["last_name"].lower()
 
-        if pattern == "random":
-            return ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(12))
+        # ベースパターン
+        variants = [
+            f"{first}{last}",
+            f"{first[0]}{last}",
+            f"{first}{last[0]}",
+            f"{last}{first}",
+            f"{first}_{last}",
+            f"{last}_{first}",
+            f"{first}.{last}",
+        ]
+        base = secrets.choice(variants)
 
-        return pattern.format(index + 1)
+        # サフィックスを追加して一意性を向上
+        suffix_choices = [
+            "",
+            str(secrets.randbelow(100)),
+            str(secrets.randbelow(9000) + 1000),
+            f"_{secrets.randbelow(1000)}",
+        ]
+        suffix = secrets.choice(suffix_choices)
+        if not suffix:
+            suffix = str(index + secrets.randbelow(50) + 1)
+
+        username = f"{base}{suffix}"
+        # 英数字と一部記号のみ許可
+        allowed_chars = string.ascii_lowercase + string.digits + "._"
+        username = ''.join(ch for ch in username if ch in allowed_chars)
+
+        # フォールバック
+        return username or ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(12))
 
     def _generate_email(self, config: Dict[str, Any], username: str) -> str:
-        """メールアドレス生成"""
-        domain = config.get("email_domain", "gmail.com")
-        return f"{username}@{domain}"
+        """メールアドレス生成（設定されたドメインを使用）"""
+        local_part = username.split('@')[0]
+
+        domain = "gmail.com"
+        if config:
+            candidate = config.get("email_domain")
+            if isinstance(candidate, str) and candidate.strip():
+                domain = candidate.strip()
+
+        domain = domain.lstrip('@') or "gmail.com"
+        return f"{local_part}@{domain}"
 
     def _generate_password(self, length: int = 16) -> str:
         """パスワード生成"""
