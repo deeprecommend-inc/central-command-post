@@ -1,0 +1,33 @@
+# =============================================================================
+# SNS Agent - Minimal Infrastructure Configuration Example
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in the values
+# =============================================================================
+
+# AWS Region (ap-northeast-1 = Tokyo, us-east-1 = cheapest)
+aws_region = "ap-northeast-1"
+
+# Project name (used for resource naming)
+project_name = "sns-agent"
+
+# EC2 Instance Type
+# - t3.micro:  2 vCPU, 1GB RAM  - FREE tier eligible (~$8.50/month after)
+# - t3a.micro: 2 vCPU, 1GB RAM  - ~$7.50/month (AMD, slightly cheaper)
+# - t3.small:  2 vCPU, 2GB RAM  - ~$17/month (recommended for production)
+instance_type = "t3.micro"
+
+# Root volume size in GB (minimum 20GB recommended)
+root_volume_size = 20
+
+# Secret key for application encryption (generate with: openssl rand -hex 32)
+secret_key = "your-secret-key-here"
+
+# SSH public key (optional - leave empty to use SSM Session Manager only)
+# Generate with: ssh-keygen -t rsa -b 4096 -f sns-agent-key
+ssh_public_key = ""
+
+# SSH allowed CIDR blocks (restrict in production!)
+ssh_allowed_cidr = ["0.0.0.0/0"]
+
+# Use ECR for container images (false = use Docker Hub, saves cost)
+use_ecr = false

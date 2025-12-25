@@ -82,69 +82,25 @@ check_ports() {
     done
 
     if [ ${#PORTS_IN_USE[@]} -gt 0 ]; then
-        print_warning "The following ports are already in use: ${PORTS_IN_USE[*]}"
-        echo ""
-        print_info "Port usage details:"
+        print_warning "Ports in use: ${PORTS_IN_USE[*]} - Auto-cleaning..."
+
+        # 1. まずDockerコンテナを停止
+        print_info "Stopping Docker containers..."
+        docker ps -q | xargs -r docker stop 2>/dev/null || true
+        sleep 1
+
+        # 2. まだ使用中なら直接プロセスを停止
         for port in "${PORTS_IN_USE[@]}"; do
-            case $port in
-                3006)
-                    echo "  Port 3006: Frontend (Next.js)"
-                    ;;
-                8006)
-                    echo "  Port 8006: Backend API (FastAPI)"
-                    ;;
-                5432)
-                    echo "  Port 5432: PostgreSQL Database"
-                    ;;
-                6379)
-                    echo "  Port 6379: Redis"
-                    ;;
-            esac
+            if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
+                PID=$(lsof -ti:$port 2>/dev/null)
+                if [ ! -z "$PID" ]; then
+                    print_info "Killing process $PID on port $port..."
+                    kill -9 $PID 2>/dev/null || true
+                fi
+            fi
         done
-        echo ""
-
-        print_warning "Options:"
-        echo "  1. Stop the processes using these ports"
-        echo "  2. Stop existing Docker containers"
-        echo "  3. Exit and manually resolve"
-        echo ""
-        read -p "Enter choice (1/2/3): " -n 1 -r
-        echo
-
-        case $REPLY in
-            1)
-                print_info "Attempting to stop processes on ports..."
-                for port in "${PORTS_IN_USE[@]}"; do
-                    PID=$(lsof -ti:$port 2>/dev/null)
-                    if [ ! -z "$PID" ]; then
-                        print_info "Killing process $PID on port $port..."
-                        kill -9 $PID 2>/dev/null || true
-                    fi
-                done
-                sleep 2
-                print_success "Processes stopped"
-                ;;
-            2)
-                print_info "Stopping Docker containers..."
-                docker ps -q | xargs -r docker stop 2>/dev/null || true
-                sleep 2
-                print_success "Docker containers stopped"
-                ;;
-            3)
-                print_info "Exiting. Please manually resolve port conflicts."
-                echo ""
-                print_info "To check port usage:"
-                echo "  lsof -i :3006"
-                echo "  lsof -i :8006"
-                echo "  lsof -i :5432"
-                echo "  lsof -i :6379"
-                exit 1
-                ;;
-            *)
-                print_error "Invalid choice. Exiting."
-                exit 1
-                ;;
-        esac
+        sleep 1
+        print_success "Ports cleared"
     else
         print_success "All required ports are available"
     fi
@@ -156,21 +112,11 @@ check_env_file() {
     print_info "Checking environment configuration..."
 
     if [ ! -f .env ]; then
-        print_warning ".env file not found. Creating from template..."
         if [ -f .env.example ]; then
             cp .env.example .env
-            print_success "Created .env file from template"
-            print_warning "Please edit .env file and configure your API keys before starting."
-            echo ""
-            print_info "Required configurations:"
-            echo "  - Database credentials (default values work for development)"
-            echo "  - OAuth credentials (YouTube, X, Instagram, TikTok)"
-            echo "  - AI API keys (Anthropic/OpenAI)"
-            echo "  - Proxy API keys (optional: BrightData, MuLogin)"
-            echo ""
-            read -p "Press Enter to continue after configuring .env, or Ctrl+C to exit..."
+            print_success "Created .env from template"
         else
-            print_error ".env.example not found. Cannot create .env file."
+            print_error ".env.example not found"
             exit 1
         fi
     else
@@ -290,14 +236,8 @@ initialize_database() {
     DB_INITIALIZED=$($DOCKER_COMPOSE exec -T postgres psql -U sns_user -d sns_orchestrator -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null || echo "0")
 
     if [ "$DB_INITIALIZED" -gt "0" ]; then
-        print_warning "Database already initialized (found $DB_INITIALIZED tables)"
-        read -p "Reinitialize database? This will drop all tables. (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            print_info "Skipping database initialization"
-            echo ""
-            return
-        fi
+        print_success "Database already initialized ($DB_INITIALIZED tables)"
+        return
     fi
 
     $DOCKER_COMPOSE exec -T backend python -c "
