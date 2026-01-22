@@ -1,1 +1,0 @@
-# SNS Platform Adapters
