@@ -152,12 +152,14 @@ Examples:
   python run.py demo
 
 Environment Variables:
-  BRIGHTDATA_USERNAME     BrightData proxy username
-  BRIGHTDATA_PASSWORD     BrightData proxy password
+  BRIGHTDATA_USERNAME     BrightData proxy username (optional)
+  BRIGHTDATA_PASSWORD     BrightData proxy password (optional)
   BRIGHTDATA_PROXY_TYPE   residential (default), datacenter, mobile, isp
-  OPENAI_API_KEY          OpenAI API key (required for AI agent)
+  OPENAI_API_KEY          OpenAI API key (required for 'ai' command only)
   PARALLEL_SESSIONS       Max parallel sessions (default: 5)
   HEADLESS                Run headless (default: true)
+
+Note: BRIGHTDATA settings are optional. Without them, the agent runs with direct connection.
 """)
 
 

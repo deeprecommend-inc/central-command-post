@@ -60,9 +60,10 @@ class WebAgent:
                 port=self.config.brightdata_port,
                 proxy_type=proxy_type,
             )
-            logger.info(f"Proxy manager initialized: type={proxy_type.value} (住宅IP)" if proxy_type == ProxyType.RESIDENTIAL else f"Proxy manager initialized: type={proxy_type.value}")
+            proxy_label = f"{proxy_type.value} (住宅IP)" if proxy_type == ProxyType.RESIDENTIAL else proxy_type.value
+            logger.info(f"Proxy enabled: type={proxy_label}")
         else:
-            logger.warning("No proxy credentials provided - running without proxy")
+            logger.info("Proxy disabled: BRIGHTDATA credentials not set (direct connection)")
 
         self.ua_manager = UserAgentManager()
         self.controller = ParallelController(
