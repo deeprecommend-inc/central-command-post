@@ -22,43 +22,217 @@ CCPは、点在するデータ、分断された判断、属人化した運用�
 
 ---
 
-# Web操作エージェント（Command層の実装）
+## アーキテクチャ
 
-プロンプトからWeb操作エージェントを実行するPythonフレームワーク。
-
-## 機能
-
-- **プロキシローテーション** - BrightData連携による自動IPローテーション
-- **IPタイプ選択** - 住宅IP / モバイルIP / データセンターIP / ISP IP
-- **ヘルスチェック** - プロキシの自動健全性確認
-- **ユーザーエージェント管理** - LRUキャッシュ付きUA/フィンガープリント
-- **並列処理** - 最大50並列のブラウザセッション
-- **自動リトライ** - 指数バックオフによる再試行
-- **レート制限** - トークンバケット方式のリクエスト制限
-- **セッション永続化** - Cookie/LocalStorage の保存・復元
-- **構造化ログ** - JSON形式対応
-
-## インストール
-
-```bash
-# 1. リポジトリをクローン
-git clone <repository-url>
-cd sns-agent
-
-# 2. 仮想環境を作成
-python3 -m venv venv
-source venv/bin/activate
-
-# 3. 依存関係をインストール
-pip install -r requirements.txt
-
-# 4. Playwrightブラウザをインストール
-playwright install chromium
-playwright install-deps chromium
-
-# 5. 環境変数を設定（オプション）
-cp .env.example .env
 ```
+                    +-----------------------------+
+                    |     CCP Orchestrator        |
+                    |   (Central Coordinator)     |
+                    +-------------+---------------+
+                                  |
+     +------------+---------------+---------------+------------+
+     |            |               |               |            |
++----v----+ +-----v-----+ +-------v-------+ +----v----+ +-----v-----+
+|  Sense  | |   Think   | |    Command    | | Control | |   Learn   |
+| (認識)  | |  (判断)   | |   (指示)      | | (監視)  | |  (学習)   |
++---------+ +-----------+ +---------------+ +---------+ +-----------+
+     |            |               |               |            |
+ EventBus     RulesEngine     WebAgent       Executor    KnowledgeStore
+ Metrics      Strategy        Browser        StateMachine PatternDetector
+ Snapshot     Decision        Proxy/UA       FeedbackLoop Analyzer
+```
+
+---
+
+## CCP統合使用
+
+```python
+import asyncio
+from src import CCPOrchestrator, AgentConfig
+
+async def main():
+    config = AgentConfig(parallel_sessions=5)
+
+    async with CCPOrchestrator(config) as ccp:
+        # 単一タスク実行
+        result = await ccp.run("https://example.com")
+        print(f"Success: {result.success}")
+        print(f"Decision: {result.decision.action}")
+        print(f"Duration: {result.duration:.2f}s")
+
+        # 複数タスク並列実行
+        results = await ccp.run_parallel([
+            "https://example.com",
+            "https://httpbin.org/ip",
+        ])
+
+        # 統計取得
+        stats = ccp.get_stats()
+        print(f"Cycles: {stats['cycle_count']}")
+
+        # パフォーマンスレポート
+        report = ccp.get_report()
+        print(f"Success rate: {report.success_rate:.1%}")
+
+asyncio.run(main())
+```
+
+---
+
+## 各レイヤーの詳細
+
+### Sense層 - 状況認識
+
+システム内外の状態を収集・正規化する。
+
+```python
+from src import EventBus, Event, MetricsCollector, StateSnapshot
+
+# イベントバス（Pub/Sub）
+bus = EventBus()
+
+async def on_error(event: Event):
+    print(f"Error: {event.data}")
+
+bus.subscribe("proxy.failure", on_error)
+await bus.publish(Event("proxy.failure", "proxy_manager", {"reason": "timeout"}))
+
+# メトリクス収集
+metrics = MetricsCollector()
+metrics.record("request.duration", 0.5, {"endpoint": "/api"})
+
+from datetime import timedelta
+stats = metrics.get_aggregated("request.duration", timedelta(minutes=5))
+print(f"Avg: {stats.avg}, Count: {stats.count}")
+
+# 状態スナップショット
+snapshot = StateSnapshot(event_bus=bus, metrics_collector=metrics)
+state = snapshot.get_current_state()
+print(f"Success rate: {state.success_rate}")
+```
+
+### Think層 - 判断
+
+収集した情報から戦略を決定する。
+
+```python
+from src import RulesEngine, Rule, DecisionContext, TaskContext, RetryStrategy
+from src.sense import SystemState
+
+# ルールエンジン
+engine = RulesEngine.create_default()
+
+# カスタムルール追加
+engine.add_rule(Rule(
+    name="high_error_rate",
+    condition=lambda ctx: ctx.get_error_frequency() > 0.5,
+    action="reduce_parallelism",
+    params={"factor": 0.5},
+    priority=100,
+))
+
+# 判断実行
+context = DecisionContext(
+    system_state=SystemState(),
+    task_context=TaskContext(task_id="t1", task_type="nav", last_error_type="timeout"),
+)
+decision = engine.evaluate_first(context)
+print(f"Action: {decision.action}, Confidence: {decision.confidence}")
+
+# リトライ戦略
+strategy = RetryStrategy(max_retries=3, backoff_base=1.0)
+decision = strategy.evaluate(context)
+```
+
+### Command層 - 指示生成・実行
+
+Web操作エージェントによる実行。
+
+```python
+from src import WebAgent, AgentConfig
+
+config = AgentConfig(
+    parallel_sessions=5,
+    headless=True,
+    proxy_type="residential",
+)
+
+async with WebAgent(config) as agent:
+    result = await agent.navigate("https://example.com")
+    if result.success:
+        print(f"Title: {result.data.get('title')}")
+```
+
+### Control層 - 実行監視
+
+タスクの状態管理とフィードバック収集。
+
+```python
+from src import Executor, Task, FeedbackLoop, TaskState
+
+# エグゼキュータ
+executor = Executor()
+task = Task(task_id="t1", task_type="navigate", target="https://example.com")
+
+async def my_task(t: Task):
+    # 実行ロジック
+    return ExecutionResult(task_id=t.task_id, success=True)
+
+result = await executor.execute(task, my_task)
+print(f"State: {result.state}")
+
+# タスク制御
+await executor.pause("t1")
+await executor.resume("t1")
+await executor.cancel("t1")
+
+# フィードバックループ
+feedback = FeedbackLoop()
+await feedback.on_result(result)
+
+adjustments = feedback.get_adjustments()
+for adj in adjustments:
+    print(f"Adjust {adj.parameter}: {adj.recommended_value}")
+```
+
+### Learn層 - 学習・知識化
+
+実行結果から学習し知識を蓄積する。
+
+```python
+from src import KnowledgeStore, KnowledgeEntry, PatternDetector, PerformanceAnalyzer
+
+# 知識ストア
+store = KnowledgeStore(max_entries=1000)
+store.store(KnowledgeEntry(
+    key="proxy.us.success_rate",
+    value=0.95,
+    confidence=0.9,
+    source="analyzer",
+))
+
+entry = store.query("proxy.us.success_rate")
+print(f"Value: {entry.value}, Confidence: {entry.confidence}")
+
+# パターン検出
+detector = PatternDetector()
+patterns = detector.analyze_events(events)
+for p in patterns:
+    print(f"Pattern: {p.pattern_type}, Confidence: {p.confidence}")
+
+# 異常検出
+anomaly = detector.detect_metric_anomaly(metrics)
+if anomaly:
+    print(f"Anomaly: {anomaly.severity} - {anomaly.description}")
+
+# パフォーマンス分析
+analyzer = PerformanceAnalyzer(metrics_collector=metrics)
+report = analyzer.generate_report()
+print(f"Success rate: {report.success_rate:.1%}")
+print(f"Recommendations: {report.recommendations}")
+```
+
+---
 
 ## CLI
 
@@ -110,139 +284,54 @@ python run.py url --json https://example.com
 python run.py url -v https://example.com
 ```
 
-### CLIオプション一覧
-
-| オプション | 短縮 | 説明 |
-|-----------|------|------|
-| `--residential` | `-r` | 住宅IP（デフォルト） |
-| `--mobile` | `-m` | モバイルIP |
-| `--datacenter` | `-d` | データセンターIP |
-| `--isp` | `-i` | ISP IP |
-| `--no-proxy` | - | 直接接続 |
-| `--json` | - | JSON形式ログ |
-| `--verbose` | `-v` | 詳細ログ |
-
-## 環境変数
-
-| 変数 | 必須 | 説明 |
-|------|------|------|
-| BRIGHTDATA_USERNAME | No | BrightDataユーザー名 |
-| BRIGHTDATA_PASSWORD | No | BrightDataパスワード |
-| BRIGHTDATA_PROXY_TYPE | No | residential/datacenter/mobile/isp |
-| PARALLEL_SESSIONS | No | 並列数（デフォルト: 5、最大: 50） |
-| HEADLESS | No | ヘッドレス実行（デフォルト: true） |
-| LOG_FORMAT | No | ログ形式: json/text（デフォルト: text） |
-| LOG_LEVEL | No | ログレベル: DEBUG/INFO/WARNING/ERROR |
-
-## Pythonコード
-
-### 基本使用
-
-```python
-import asyncio
-from src import WebAgent, AgentConfig
-
-async def main():
-    config = AgentConfig(
-        parallel_sessions=5,
-        headless=True,
-    )
-
-    # コンテキストマネージャーで自動クリーンアップ
-    async with WebAgent(config) as agent:
-        result = await agent.navigate("https://httpbin.org/ip")
-        if result.success:
-            print(f"Title: {result.data.get('title')}")
-
-        # 複数URLに並列アクセス
-        results = await agent.parallel_navigate([
-            "https://httpbin.org/ip",
-            "https://httpbin.org/user-agent",
-        ])
-
-asyncio.run(main())
-```
-
-### プロキシ使用
-
-```python
-async def main():
-    config = AgentConfig(
-        brightdata_username="your_username",
-        brightdata_password="your_password",
-        proxy_type="mobile",
-    )
-
-    async with WebAgent(config) as agent:
-        # プロキシヘルスチェック
-        health = await agent.health_check()
-        print(f"Proxy health: {health}")
-
-        result = await agent.navigate("https://httpbin.org/ip")
-        print(f"IP: {result.data}")
-```
-
-### レート制限
-
-```python
-from src import TokenBucketRateLimiter, DomainRateLimiter
-
-# 単一ドメイン用
-limiter = TokenBucketRateLimiter(
-    requests_per_second=2.0,
-    burst_size=5,
-)
-
-async with limiter:
-    await make_request()
-
-# ドメイン別レート制限
-domain_limiter = DomainRateLimiter(default_rps=1.0)
-domain_limiter.set_domain_limit("api.example.com", 5.0)
-
-async with domain_limiter.for_url("https://api.example.com/data"):
-    await fetch_data()
-```
-
-### セッション永続化
-
-```python
-from src import SessionManager
-
-manager = SessionManager(storage_dir="./sessions")
-
-# ログイン後にセッション保存
-await manager.save_session(browser_context, "user_session")
-
-# 次回起動時にセッション復元
-await manager.load_session(browser_context, "user_session")
-
-# セッション一覧
-sessions = manager.list_sessions()
-
-# セッション削除
-manager.delete_session("user_session")
-```
-
-### 構造化ログ
-
-```python
-from src import configure_logging
-
-# JSON形式でログ出力
-configure_logging(level="INFO", json_format=True)
-
-# ファイル出力
-configure_logging(
-    level="DEBUG",
-    json_format=True,
-    log_file="./logs/agent.log"
-)
-```
+---
 
 ## API リファレンス
 
-### WebAgent
+### CCPOrchestrator
+
+| メソッド | 説明 |
+|---------|------|
+| `run(target, task_type)` | CCPサイクルを実行 |
+| `run_parallel(targets)` | 複数タスクを並列実行 |
+| `get_stats()` | 統計を取得 |
+| `get_report()` | パフォーマンスレポートを生成 |
+| `cleanup()` | リソースを解放 |
+
+### Sense Layer
+
+| クラス | 説明 |
+|--------|------|
+| `EventBus` | Pub/Subイベントシステム |
+| `MetricsCollector` | 時系列メトリクス収集 |
+| `StateSnapshot` | システム状態スナップショット |
+
+### Think Layer
+
+| クラス | 説明 |
+|--------|------|
+| `RulesEngine` | ルールベース判断エンジン |
+| `RetryStrategy` | リトライ判断戦略 |
+| `ProxySelectionStrategy` | プロキシ選択戦略 |
+| `DecisionContext` | 判断コンテキスト |
+
+### Control Layer
+
+| クラス | 説明 |
+|--------|------|
+| `Executor` | タスク実行管理 |
+| `StateMachine` | 状態遷移管理 |
+| `FeedbackLoop` | フィードバック収集・調整 |
+
+### Learn Layer
+
+| クラス | 説明 |
+|--------|------|
+| `KnowledgeStore` | インメモリ知識ストア |
+| `PatternDetector` | パターン・異常検出 |
+| `PerformanceAnalyzer` | パフォーマンス分析 |
+
+### Command Layer (WebAgent)
 
 | メソッド | 説明 |
 |---------|------|
@@ -250,57 +339,9 @@ configure_logging(
 | `parallel_navigate(urls)` | 複数URLに並列アクセス |
 | `run_custom_task(task_id, task_fn)` | カスタムタスクを実行 |
 | `get_proxy_stats()` | プロキシ統計を取得 |
-| `get_proxy_health()` | プロキシ健全性サマリを取得 |
 | `health_check()` | ライブヘルスチェック実行 |
-| `cleanup()` | リソースを解放 |
-| `is_closed` | クローズ状態を取得 |
 
-### BrowserWorker
-
-| メソッド | 説明 |
-|---------|------|
-| `navigate(url)` | URLにアクセス |
-| `get_content()` | ページコンテンツを取得 |
-| `click(selector)` | 要素をクリック |
-| `fill(selector, value)` | 入力フィールドに値を設定 |
-| `type(selector, text, delay)` | テキストを1文字ずつ入力 |
-| `screenshot(path)` | スクリーンショットを保存 |
-| `evaluate(script)` | JavaScriptを実行 |
-| `scroll(direction, amount)` | ページをスクロール |
-| `hover(selector)` | 要素にホバー |
-| `select(selector, value)` | ドロップダウンから選択 |
-| `get_text(selector)` | 要素のテキストを取得 |
-| `wait_for_selector(selector)` | 要素の出現を待機 |
-| `wait_for_navigation()` | ナビゲーション完了を待機 |
-| `press(key)` | キーボードキーを押下 |
-
-### TokenBucketRateLimiter
-
-| メソッド | 説明 |
-|---------|------|
-| `acquire()` | トークンを取得（待機あり） |
-| `get_stats()` | 統計情報を取得 |
-| `reset()` | リセット |
-
-### SessionManager
-
-| メソッド | 説明 |
-|---------|------|
-| `save_session(context, id)` | セッションを保存 |
-| `load_session(context, id)` | セッションを読込 |
-| `get_session(id)` | セッションデータを取得 |
-| `delete_session(id)` | セッションを削除 |
-| `list_sessions()` | セッション一覧 |
-| `clear_all()` | 全セッション削除 |
-
-### ParallelController
-
-| 設定 | デフォルト | 説明 |
-|------|-----------|------|
-| `max_workers` | 5 | 最大並列数 |
-| `max_retries` | 3 | 最大リトライ回数 |
-| `BASE_DELAY` | 1.0s | リトライ基本待機時間 |
-| `MAX_DELAY` | 30.0s | リトライ最大待機時間 |
+---
 
 ## エラーハンドリング
 
@@ -321,16 +362,7 @@ configure_logging(
 - 新しいプロキシで再試行
 - 最大3回リトライ（設定可能）
 
-## 設定バリデーション
-
-AgentConfigは以下のバリデーションを実行:
-
-| フィールド | 制約 |
-|-----------|------|
-| `brightdata_port` | 1-65535 |
-| `parallel_sessions` | 1-50 |
-| `max_retries` | 0-10 |
-| `proxy_type` | residential/datacenter/mobile/isp |
+---
 
 ## テスト
 
@@ -340,7 +372,49 @@ pytest tests/ -v
 
 # カバレッジ付き
 pytest tests/ --cov=src
+
+# 特定レイヤーのテスト
+pytest tests/test_sense/ -v
+pytest tests/test_think/ -v
+pytest tests/test_control/ -v
+pytest tests/test_learn/ -v
+pytest tests/test_ccp.py -v
 ```
+
+---
+
+## ファイル構成
+
+```
+src/
+├── ccp.py                   # CCPOrchestrator
+├── sense/                   # Sense層
+│   ├── event_bus.py
+│   ├── metrics_collector.py
+│   └── state_snapshot.py
+├── think/                   # Think層
+│   ├── strategy.py
+│   ├── rules_engine.py
+│   └── decision_context.py
+├── control/                 # Control層
+│   ├── executor.py
+│   ├── state_machine.py
+│   └── feedback_loop.py
+├── learn/                   # Learn層
+│   ├── knowledge_store.py
+│   ├── pattern_detector.py
+│   └── performance_analyzer.py
+├── web_agent.py            # Command層
+├── proxy_manager.py
+├── browser_worker.py
+├── parallel_controller.py
+├── ua_manager.py
+├── rate_limiter.py
+├── session_manager.py
+└── logging_config.py
+```
+
+---
 
 ## 依存関係
 
