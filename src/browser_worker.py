@@ -2,13 +2,27 @@
 Browser Worker - Single browser session with proxy and UA
 """
 import asyncio
+import os
 from typing import Optional, Any
 from dataclasses import dataclass
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+from enum import Enum
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeout
+from playwright._impl._errors import TargetClosedError
 from loguru import logger
 
 from .proxy_manager import ProxyConfig
 from .ua_manager import BrowserProfile
+
+
+class ErrorType(Enum):
+    """Error type classification for better handling"""
+    TIMEOUT = "timeout"
+    CONNECTION = "connection"
+    PROXY = "proxy"
+    ELEMENT_NOT_FOUND = "element_not_found"
+    BROWSER_CLOSED = "browser_closed"
+    VALIDATION = "validation"
+    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -18,11 +32,86 @@ class WorkerResult:
     success: bool
     data: Any = None
     error: Optional[str] = None
+    error_type: Optional[ErrorType] = None
     screenshot_path: Optional[str] = None
+
+    @property
+    def is_retryable(self) -> bool:
+        """Check if error is retryable"""
+        if self.success:
+            return False
+        retryable_types = {ErrorType.TIMEOUT, ErrorType.CONNECTION, ErrorType.PROXY}
+        return self.error_type in retryable_types
+
+
+def _classify_error(error: Exception) -> tuple[ErrorType, str]:
+    """Classify error type and return formatted message"""
+    error_str = str(error).lower()
+
+    # Timeout errors
+    if isinstance(error, (asyncio.TimeoutError, PlaywrightTimeout)):
+        return ErrorType.TIMEOUT, f"Timeout: {error}"
+
+    # Connection errors
+    if isinstance(error, (ConnectionError, ConnectionRefusedError, ConnectionResetError)):
+        return ErrorType.CONNECTION, f"Connection error: {error}"
+
+    # Browser closed errors
+    if isinstance(error, TargetClosedError):
+        return ErrorType.BROWSER_CLOSED, f"Browser closed: {error}"
+
+    # Proxy-related errors (string matching)
+    proxy_indicators = ["proxy", "tunnel", "econnrefused", "econnreset", "etimedout", "502", "503", "407"]
+    if any(indicator in error_str for indicator in proxy_indicators):
+        return ErrorType.PROXY, f"Proxy error: {error}"
+
+    # Element not found
+    element_indicators = ["selector", "element", "not found", "no element", "waiting for"]
+    if any(indicator in error_str for indicator in element_indicators):
+        return ErrorType.ELEMENT_NOT_FOUND, f"Element not found: {error}"
+
+    # Connection related (string matching fallback)
+    conn_indicators = ["network", "connection", "socket", "refused", "reset", "unreachable"]
+    if any(indicator in error_str for indicator in conn_indicators):
+        return ErrorType.CONNECTION, f"Connection error: {error}"
+
+    return ErrorType.UNKNOWN, str(error)
+
+
+def _validate_url(url: str) -> Optional[str]:
+    """Validate URL format. Returns error message if invalid, None if valid."""
+    if not url:
+        return "URL cannot be empty"
+    if not url.startswith(("http://", "https://")):
+        return "URL must start with http:// or https://"
+    return None
+
+
+def _validate_path(path: str) -> Optional[str]:
+    """Validate file path for security. Returns error message if invalid."""
+    if not path:
+        return "Path cannot be empty"
+
+    # Normalize path to detect traversal
+    normalized = os.path.normpath(path)
+
+    # Check for directory traversal
+    if ".." in normalized:
+        return "Path traversal not allowed"
+
+    # Check for absolute paths outside allowed directories
+    allowed_prefixes = ["/tmp/", "/var/tmp/", os.getcwd()]
+    if os.path.isabs(normalized):
+        if not any(normalized.startswith(prefix) for prefix in allowed_prefixes):
+            return f"Path must be within allowed directories: {allowed_prefixes}"
+
+    return None
 
 
 class BrowserWorker:
     """Single browser worker with proxy and user agent configuration"""
+
+    DEFAULT_TIMEOUT = 30000  # 30 seconds
 
     def __init__(
         self,
@@ -69,99 +158,206 @@ class BrowserWorker:
         """Clean up browser resources"""
         logger.info(f"Worker {self.worker_id}: Stopping browser")
 
-        if self._page:
-            await self._page.close()
-        if self._context:
-            await self._context.close()
-        if self._browser:
-            await self._browser.close()
-        if self._playwright:
-            await self._playwright.stop()
+        try:
+            if self._page:
+                await self._page.close()
+        except Exception as e:
+            logger.debug(f"Worker {self.worker_id}: Page close error (ignored): {e}")
 
-    async def navigate(self, url: str, wait_until: str = "domcontentloaded") -> WorkerResult:
-        """Navigate to URL"""
+        try:
+            if self._context:
+                await self._context.close()
+        except Exception as e:
+            logger.debug(f"Worker {self.worker_id}: Context close error (ignored): {e}")
+
+        try:
+            if self._browser:
+                await self._browser.close()
+        except Exception as e:
+            logger.debug(f"Worker {self.worker_id}: Browser close error (ignored): {e}")
+
+        try:
+            if self._playwright:
+                await self._playwright.stop()
+        except Exception as e:
+            logger.debug(f"Worker {self.worker_id}: Playwright stop error (ignored): {e}")
+
+    async def navigate(self, url: str, wait_until: str = "domcontentloaded", timeout: int = DEFAULT_TIMEOUT) -> WorkerResult:
+        """Navigate to URL with proper error handling"""
         if not self._page:
-            return WorkerResult(success=False, error="Browser not started")
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        # Validate URL
+        url_error = _validate_url(url)
+        if url_error:
+            return WorkerResult(success=False, error=url_error, error_type=ErrorType.VALIDATION)
 
         try:
             logger.debug(f"Worker {self.worker_id}: Navigating to {url}")
-            response = await self._page.goto(url, wait_until=wait_until)
+            response = await self._page.goto(url, wait_until=wait_until, timeout=timeout)
+
+            # Check for HTTP error status codes
+            if response and response.status >= 400:
+                error_msg = f"HTTP {response.status}"
+                if response.status in (502, 503, 504):
+                    return WorkerResult(success=False, error=error_msg, error_type=ErrorType.PROXY)
+                elif response.status == 407:
+                    return WorkerResult(success=False, error="Proxy authentication required", error_type=ErrorType.PROXY)
+                else:
+                    return WorkerResult(success=False, error=error_msg, error_type=ErrorType.CONNECTION)
+
             return WorkerResult(
                 success=True,
                 data={"status": response.status if response else None, "url": self._page.url},
             )
+
+        except PlaywrightTimeout as e:
+            logger.warning(f"Worker {self.worker_id}: Navigation timeout: {url}")
+            return WorkerResult(success=False, error=f"Navigation timeout: {e}", error_type=ErrorType.TIMEOUT)
+
+        except TargetClosedError as e:
+            logger.error(f"Worker {self.worker_id}: Browser closed during navigation")
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
         except Exception as e:
-            logger.error(f"Worker {self.worker_id}: Navigation error: {e}")
-            return WorkerResult(success=False, error=str(e))
+            error_type, error_msg = _classify_error(e)
+            logger.error(f"Worker {self.worker_id}: Navigation error ({error_type.value}): {e}")
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
 
     async def get_content(self) -> WorkerResult:
         """Get page content"""
         if not self._page:
-            return WorkerResult(success=False, error="Browser not started")
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
 
         try:
             content = await self._page.content()
             title = await self._page.title()
             return WorkerResult(success=True, data={"title": title, "content": content})
+
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Timeout getting content: {e}", error_type=ErrorType.TIMEOUT)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
         except Exception as e:
-            return WorkerResult(success=False, error=str(e))
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
 
     async def screenshot(self, path: str) -> WorkerResult:
-        """Take screenshot"""
+        """Take screenshot with path validation"""
         if not self._page:
-            return WorkerResult(success=False, error="Browser not started")
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        # Validate path for security
+        path_error = _validate_path(path)
+        if path_error:
+            return WorkerResult(success=False, error=path_error, error_type=ErrorType.VALIDATION)
 
         try:
             await self._page.screenshot(path=path, full_page=True)
             return WorkerResult(success=True, screenshot_path=path)
-        except Exception as e:
-            return WorkerResult(success=False, error=str(e))
 
-    async def click(self, selector: str) -> WorkerResult:
-        """Click element"""
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Screenshot timeout: {e}", error_type=ErrorType.TIMEOUT)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
+        except OSError as e:
+            return WorkerResult(success=False, error=f"File system error: {e}", error_type=ErrorType.VALIDATION)
+
+        except Exception as e:
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
+
+    async def click(self, selector: str, timeout: int = DEFAULT_TIMEOUT) -> WorkerResult:
+        """Click element with proper error handling"""
         if not self._page:
-            return WorkerResult(success=False, error="Browser not started")
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        if not selector:
+            return WorkerResult(success=False, error="Selector cannot be empty", error_type=ErrorType.VALIDATION)
 
         try:
-            await self._page.click(selector)
+            await self._page.click(selector, timeout=timeout)
             return WorkerResult(success=True)
-        except Exception as e:
-            return WorkerResult(success=False, error=str(e))
 
-    async def fill(self, selector: str, value: str) -> WorkerResult:
-        """Fill input field"""
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Click timeout - element not found: {selector}", error_type=ErrorType.ELEMENT_NOT_FOUND)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
+        except Exception as e:
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
+
+    async def fill(self, selector: str, value: str, timeout: int = DEFAULT_TIMEOUT) -> WorkerResult:
+        """Fill input field with proper error handling"""
         if not self._page:
-            return WorkerResult(success=False, error="Browser not started")
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        if not selector:
+            return WorkerResult(success=False, error="Selector cannot be empty", error_type=ErrorType.VALIDATION)
 
         try:
-            await self._page.fill(selector, value)
+            await self._page.fill(selector, value, timeout=timeout)
             return WorkerResult(success=True)
+
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Fill timeout - element not found: {selector}", error_type=ErrorType.ELEMENT_NOT_FOUND)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
         except Exception as e:
-            return WorkerResult(success=False, error=str(e))
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
 
     async def evaluate(self, script: str) -> WorkerResult:
-        """Evaluate JavaScript"""
+        """Evaluate JavaScript with proper error handling"""
         if not self._page:
-            return WorkerResult(success=False, error="Browser not started")
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        if not script:
+            return WorkerResult(success=False, error="Script cannot be empty", error_type=ErrorType.VALIDATION)
 
         try:
             result = await self._page.evaluate(script)
             return WorkerResult(success=True, data=result)
-        except Exception as e:
-            return WorkerResult(success=False, error=str(e))
 
-    async def wait_for_selector(
-        self, selector: str, timeout: int = 30000
-    ) -> WorkerResult:
-        """Wait for selector to appear"""
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Script timeout: {e}", error_type=ErrorType.TIMEOUT)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
+        except Exception as e:
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
+
+    async def wait_for_selector(self, selector: str, timeout: int = DEFAULT_TIMEOUT) -> WorkerResult:
+        """Wait for selector to appear with proper error handling"""
         if not self._page:
-            return WorkerResult(success=False, error="Browser not started")
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        if not selector:
+            return WorkerResult(success=False, error="Selector cannot be empty", error_type=ErrorType.VALIDATION)
 
         try:
             await self._page.wait_for_selector(selector, timeout=timeout)
             return WorkerResult(success=True)
+
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Selector not found within timeout: {selector}", error_type=ErrorType.ELEMENT_NOT_FOUND)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
         except Exception as e:
-            return WorkerResult(success=False, error=str(e))
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
 
     @property
     def page(self) -> Optional[Page]:
