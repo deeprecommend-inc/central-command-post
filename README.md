@@ -28,12 +28,15 @@ CCPは、点在するデータ、分断された判断、属人化した運用�
 
 ## 機能
 
-- **プロキシローテーション** - BrightData連携による自動IPローテーション（オプション）
+- **プロキシローテーション** - BrightData連携による自動IPローテーション
 - **IPタイプ選択** - 住宅IP / モバイルIP / データセンターIP / ISP IP
-- **ユーザーエージェント管理** - セッションごとに一貫したUA/フィンガープリント
-- **並列処理** - 最大5並列のブラウザセッション
+- **ヘルスチェック** - プロキシの自動健全性確認
+- **ユーザーエージェント管理** - LRUキャッシュ付きUA/フィンガープリント
+- **並列処理** - 最大50並列のブラウザセッション
 - **自動リトライ** - 指数バックオフによる再試行
-- **プロキシ自動切替** - 接続エラー時に新しいプロキシへ自動切替
+- **レート制限** - トークンバケット方式のリクエスト制限
+- **セッション永続化** - Cookie/LocalStorage の保存・復元
+- **構造化ログ** - JSON形式対応
 
 ## インストール
 
@@ -57,16 +60,19 @@ playwright install-deps chromium
 cp .env.example .env
 ```
 
-## 使用方法
+## CLI
 
-### CLI
+### 基本コマンド
 
 ```bash
-# 基本的なURL操作
+# URL操作
 python run.py url https://example.com
 
 # 複数URL並列
 python run.py url https://example.com https://google.com https://github.com
+
+# プロキシヘルスチェック
+python run.py health
 
 # デモ
 python run.py demo
@@ -79,65 +85,32 @@ python run.py --help
 
 ```bash
 # 住宅IP（デフォルト）
-python run.py url https://example.com
 python run.py url -r https://example.com
-python run.py url --residential https://example.com
 
 # モバイルIP
 python run.py url -m https://example.com
-python run.py url --mobile https://example.com
 
 # データセンターIP
 python run.py url -d https://example.com
-python run.py url --datacenter https://example.com
 
 # ISP IP
 python run.py url -i https://example.com
-python run.py url --isp https://example.com
 
 # プロキシなし（直接接続）
 python run.py url --no-proxy https://example.com
-python run.py demo --no-proxy
 ```
 
-### 複数プロキシ・UAで並列実行
+### ロギングオプション
 
 ```bash
-# 5つのURLを異なるプロキシ・UAで並列実行（住宅IP）
-python run.py url -r https://site1.com https://site2.com https://site3.com https://site4.com https://site5.com
+# JSON形式でログ出力
+python run.py url --json https://example.com
 
-# モバイルIPで並列実行
-python run.py url -m https://site1.com https://site2.com https://site3.com
+# 詳細ログ（DEBUG）
+python run.py url -v https://example.com
 ```
 
-各ブラウザセッションは自動的に:
-- 異なるプロキシ（国ローテーション）
-- 異なるユーザーエージェント
-- 異なるフィンガープリント
-
-を使用します。
-
-### AI駆動ブラウザ操作（browser-use）
-
-自然言語でWeb操作を実行できます。
-
-```bash
-# 単一タスク（住宅IP）
-python run.py ai "Googleで'Python'を検索してトップ3の結果を取得"
-
-# モバイルIPでAIタスク
-python run.py ai -m "Amazonで'laptop'を検索して価格を比較"
-
-# 複数タスクを並列実行（異なるプロキシ・UA）
-python run.py parallel "サイトAでログイン" "サイトBでデータ取得" "サイトCでスクリーンショット"
-
-# 異なるIPタイプで並列AI
-python run.py parallel -d "タスク1" "タスク2" "タスク3"
-```
-
-**注意**: AI機能（browser-use）はWSL環境では現在無効です。ネイティブLinux/Mac環境で使用してください。
-
-### CLIオプション
+### CLIオプション一覧
 
 | オプション | 短縮 | 説明 |
 |-----------|------|------|
@@ -145,25 +118,29 @@ python run.py parallel -d "タスク1" "タスク2" "タスク3"
 | `--mobile` | `-m` | モバイルIP |
 | `--datacenter` | `-d` | データセンターIP |
 | `--isp` | `-i` | ISP IP |
-| `--no-proxy` | - | 直接接続（プロキシ無効） |
+| `--no-proxy` | - | 直接接続 |
+| `--json` | - | JSON形式ログ |
+| `--verbose` | `-v` | 詳細ログ |
 
 ## 環境変数
 
 | 変数 | 必須 | 説明 |
 |------|------|------|
-| BRIGHTDATA_USERNAME | No | BrightDataユーザー名（未設定時は直接接続） |
+| BRIGHTDATA_USERNAME | No | BrightDataユーザー名 |
 | BRIGHTDATA_PASSWORD | No | BrightDataパスワード |
 | BRIGHTDATA_PROXY_TYPE | No | residential/datacenter/mobile/isp |
-| PARALLEL_SESSIONS | No | 並列数（デフォルト: 5） |
+| PARALLEL_SESSIONS | No | 並列数（デフォルト: 5、最大: 50） |
 | HEADLESS | No | ヘッドレス実行（デフォルト: true） |
-| OPENAI_API_KEY | No | OpenAI APIキー（AI機能使用時のみ必須） |
+| LOG_FORMAT | No | ログ形式: json/text（デフォルト: text） |
+| LOG_LEVEL | No | ログレベル: DEBUG/INFO/WARNING/ERROR |
 
 ## Pythonコード
 
+### 基本使用
+
 ```python
 import asyncio
-from src import WebAgent
-from src.web_agent import AgentConfig
+from src import WebAgent, AgentConfig
 
 async def main():
     config = AgentConfig(
@@ -186,14 +163,14 @@ async def main():
 asyncio.run(main())
 ```
 
-### プロキシ使用時
+### プロキシ使用
 
 ```python
 async def main():
     config = AgentConfig(
         brightdata_username="your_username",
         brightdata_password="your_password",
-        proxy_type="mobile",  # residential/mobile/datacenter/isp
+        proxy_type="mobile",
     )
 
     async with WebAgent(config) as agent:
@@ -205,39 +182,62 @@ async def main():
         print(f"IP: {result.data}")
 ```
 
-### AI駆動ブラウザ操作（Pythonコード）
+### レート制限
 
 ```python
-import asyncio
-from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
+from src import TokenBucketRateLimiter, DomainRateLimiter
 
-async def main():
-    config = BrowserUseConfig(
-        brightdata_username="your_username",
-        brightdata_password="your_password",
-        proxy_type="mobile",  # residential/mobile/datacenter/isp
-        openai_api_key="your_openai_key",
-        model="gpt-4o",
-        headless=True,
-    )
+# 単一ドメイン用
+limiter = TokenBucketRateLimiter(
+    requests_per_second=2.0,
+    burst_size=5,
+)
 
-    agent = BrowserUseAgent(config)
+async with limiter:
+    await make_request()
 
-    # 単一タスク実行
-    result = await agent.run("Googleで'AI'を検索してトップ5の結果を取得")
-    print(result)
+# ドメイン別レート制限
+domain_limiter = DomainRateLimiter(default_rps=1.0)
+domain_limiter.set_domain_limit("api.example.com", 5.0)
 
-    # 複数タスクを並列実行（各タスクは異なるプロキシ・UAを使用）
-    tasks = [
-        "サイトAでログインしてダッシュボードを開く",
-        "サイトBで商品価格を取得",
-        "サイトCでニュースヘッドラインを収集",
-    ]
-    results = await agent.run_parallel(tasks, max_concurrent=3)
-    for r in results:
-        print(f"Task {r['index']}: {'Success' if r['success'] else r['error']}")
+async with domain_limiter.for_url("https://api.example.com/data"):
+    await fetch_data()
+```
 
-asyncio.run(main())
+### セッション永続化
+
+```python
+from src import SessionManager
+
+manager = SessionManager(storage_dir="./sessions")
+
+# ログイン後にセッション保存
+await manager.save_session(browser_context, "user_session")
+
+# 次回起動時にセッション復元
+await manager.load_session(browser_context, "user_session")
+
+# セッション一覧
+sessions = manager.list_sessions()
+
+# セッション削除
+manager.delete_session("user_session")
+```
+
+### 構造化ログ
+
+```python
+from src import configure_logging
+
+# JSON形式でログ出力
+configure_logging(level="INFO", json_format=True)
+
+# ファイル出力
+configure_logging(
+    level="DEBUG",
+    json_format=True,
+    log_file="./logs/agent.log"
+)
 ```
 
 ## API リファレンス
@@ -250,14 +250,10 @@ asyncio.run(main())
 | `parallel_navigate(urls)` | 複数URLに並列アクセス |
 | `run_custom_task(task_id, task_fn)` | カスタムタスクを実行 |
 | `get_proxy_stats()` | プロキシ統計を取得 |
+| `get_proxy_health()` | プロキシ健全性サマリを取得 |
+| `health_check()` | ライブヘルスチェック実行 |
 | `cleanup()` | リソースを解放 |
-
-### BrowserUseAgent（AI駆動）
-
-| メソッド | 説明 |
-|---------|------|
-| `run(task)` | 自然言語タスクを実行 |
-| `run_parallel(tasks, max_concurrent)` | 複数タスクを並列実行 |
+| `is_closed` | クローズ状態を取得 |
 
 ### BrowserWorker
 
@@ -267,7 +263,7 @@ asyncio.run(main())
 | `get_content()` | ページコンテンツを取得 |
 | `click(selector)` | 要素をクリック |
 | `fill(selector, value)` | 入力フィールドに値を設定 |
-| `type(selector, text)` | テキストを1文字ずつ入力 |
+| `type(selector, text, delay)` | テキストを1文字ずつ入力 |
 | `screenshot(path)` | スクリーンショットを保存 |
 | `evaluate(script)` | JavaScriptを実行 |
 | `scroll(direction, amount)` | ページをスクロール |
@@ -277,6 +273,25 @@ asyncio.run(main())
 | `wait_for_selector(selector)` | 要素の出現を待機 |
 | `wait_for_navigation()` | ナビゲーション完了を待機 |
 | `press(key)` | キーボードキーを押下 |
+
+### TokenBucketRateLimiter
+
+| メソッド | 説明 |
+|---------|------|
+| `acquire()` | トークンを取得（待機あり） |
+| `get_stats()` | 統計情報を取得 |
+| `reset()` | リセット |
+
+### SessionManager
+
+| メソッド | 説明 |
+|---------|------|
+| `save_session(context, id)` | セッションを保存 |
+| `load_session(context, id)` | セッションを読込 |
+| `get_session(id)` | セッションデータを取得 |
+| `delete_session(id)` | セッションを削除 |
+| `list_sessions()` | セッション一覧 |
+| `clear_all()` | 全セッション削除 |
 
 ### ParallelController
 
@@ -289,11 +304,43 @@ asyncio.run(main())
 
 ## エラーハンドリング
 
-プロキシ関連のエラー時に自動的にリトライ:
+### ErrorType
+
+| タイプ | リトライ | 説明 |
+|--------|---------|------|
+| `TIMEOUT` | Yes | タイムアウト |
+| `CONNECTION` | Yes | 接続エラー |
+| `PROXY` | Yes | プロキシエラー |
+| `ELEMENT_NOT_FOUND` | No | 要素が見つからない |
+| `VALIDATION` | No | バリデーションエラー |
+| `BROWSER_CLOSED` | No | ブラウザが閉じた |
+
+### 自動リトライ
 
 - 指数バックオフ: 1s → 2s → 4s → ... (最大30s)
 - 新しいプロキシで再試行
-- 最大3回リトライ
+- 最大3回リトライ（設定可能）
+
+## 設定バリデーション
+
+AgentConfigは以下のバリデーションを実行:
+
+| フィールド | 制約 |
+|-----------|------|
+| `brightdata_port` | 1-65535 |
+| `parallel_sessions` | 1-50 |
+| `max_retries` | 0-10 |
+| `proxy_type` | residential/datacenter/mobile/isp |
+
+## テスト
+
+```bash
+# 全テスト実行
+pytest tests/ -v
+
+# カバレッジ付き
+pytest tests/ --cov=src
+```
 
 ## 依存関係
 

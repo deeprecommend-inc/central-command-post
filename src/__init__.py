@@ -5,6 +5,8 @@ from .browser_worker import BrowserWorker, WorkerResult, ErrorType
 from .parallel_controller import ParallelController, TaskResult
 from .browser_use_agent import BrowserUseAgent
 from .logging_config import configure_logging
+from .rate_limiter import TokenBucketRateLimiter, DomainRateLimiter
+from .session_manager import SessionManager, SessionData
 
 __all__ = [
     "WebAgent",
@@ -19,4 +21,8 @@ __all__ = [
     "TaskResult",
     "BrowserUseAgent",
     "configure_logging",
+    "TokenBucketRateLimiter",
+    "DomainRateLimiter",
+    "SessionManager",
+    "SessionData",
 ]
