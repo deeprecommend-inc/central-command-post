@@ -71,7 +71,6 @@ CCPは、点在するデータ、分断された判断、属人化した運用�
 - 不要になったフォルダやファイルは随時削除すること
 - 絵文字は使わない
 - 全ての操作をコマンドで完結するように
-- 一個一個期待する結果は何で、どんな仮説を持って、どんな検証し、どんな結果が出たかを事実確認しながら進めて
 
 ---
 
@@ -82,9 +81,38 @@ CCPは、点在するデータ、分断された判断、属人化した運用�
 
 ## 達成すること
 - プロキシローテーション（BrightData）※オプション
+- IPタイプ選択（住宅IP / モバイルIP）
 - ユーザーエージェント管理
-- browser-useでWeb操作エージェントを実行
 - 並列ブラウザセッション管理（5並列）
+
+## CLI使用方法
+
+```bash
+# 基本
+python run.py url https://example.com
+
+# 住宅IP（デフォルト）
+python run.py url -r https://example.com
+
+# モバイルIP
+python run.py url -m https://example.com
+
+# プロキシなし
+python run.py url --no-proxy https://example.com
+
+# デモ
+python run.py demo --no-proxy
+```
+
+## CLIオプション
+
+| オプション | 短縮 | 説明 |
+|-----------|------|------|
+| `--residential` | `-r` | 住宅IP（デフォルト） |
+| `--mobile` | `-m` | モバイルIP |
+| `--datacenter` | `-d` | データセンターIP |
+| `--isp` | `-i` | ISP IP |
+| `--no-proxy` | - | 直接接続 |
 
 ## 環境変数
 
@@ -93,83 +121,42 @@ CCPは、点在するデータ、分断された判断、属人化した運用�
 | BRIGHTDATA_USERNAME | No | BrightDataユーザー名（未設定時は直接接続） |
 | BRIGHTDATA_PASSWORD | No | BrightDataパスワード |
 | BRIGHTDATA_PROXY_TYPE | No | residential/datacenter/mobile/isp |
-| OPENAI_API_KEY | AIモードのみ | OpenAI APIキー |
 | PARALLEL_SESSIONS | No | 並列数（デフォルト: 5） |
 | HEADLESS | No | ヘッドレス実行（デフォルト: true） |
 
 ## システムアーキテクチャ
 
 ```text
-[ CLI / API ] → [ コアコントローラー ] → [ ワークマネージャー ]
-      ↓                  ↓                      ↓
-[ 設定ファイル ]  [ リソースマネージャー ]   [ ブラウザワーカー群 ]
+[ CLI ] → [ WebAgent ] → [ ParallelController ] → [ BrowserWorker ]
+   ↓            ↓                ↓                      ↓
+[ 設定 ]  [ ProxyManager ]  [ リトライ機構 ]    [ Playwright ]
 ```
 
 ## コアコンポーネント
 
-### ResourceManager
-```python
-class ResourceManager:
-    # プロキシ管理（BrightData）
-    - プロキシプールの初期化
-    - プロキシヘルスチェック
-    - ローテーションロジック（使用回数、応答時間、成功率）
-
-    # ユーザーエージェント管理
-    - UAプールの管理
-    - フィンガープリント生成
-    - セッションごとのUA固定
-```
+### ProxyManager
+- プロキシプールの初期化
+- プロキシヘルスチェック
+- ローテーションロジック（使用回数、応答時間、成功率）
 
 ### BrowserWorker
-```python
-class BrowserWorker:
-    # セッション設定
-    - プロキシ設定適用
-    - ユーザーエージェント設定
-    - キャッシュ・Cookie管理
-
-    # Web操作フロー
-    - プロンプトに基づくタスク実行
-    - ページナビゲーション
-    - 要素操作（クリック、入力、スクロール）
-    - スクリーンショット取得
-    - データ抽出
-```
+- プロキシ設定適用
+- ユーザーエージェント設定
+- ページナビゲーション
+- 要素操作（クリック、入力、スクロール）
+- スクリーンショット取得
 
 ### ParallelController
-```python
-class ParallelController:
-    # 並列処理管理
-    - 5並列のブラウザセッション制御
-    - リソース割り当て最適化
-    - 負荷分散
-
-    # エラーハンドリング
-    - プロキシ切断時の自動切り替え
-    - 再試行メカニズム（指数バックオフ）
-```
+- 5並列のブラウザセッション制御
+- 指数バックオフによる再試行（1s → 2s → 4s、最大30s）
+- プロキシ切断時の自動切り替え
 
 ## 技術スタック
 
-- 自動化: browser-use / Playwright
+- 自動化: Playwright
 - プロキシ: BrightData
-- DB: SQLite / PostgreSQL
 - 設定: python-dotenv
 
 ```bash
-pip install browser-use playwright fake-useragent aiohttp python-dotenv loguru tenacity pydantic
-```
-
-## 使用例
-
-```python
-from web_agent import WebAgent
-
-agent = WebAgent(
-    proxy_config="brightdata",
-    parallel_sessions=5
-)
-
-result = await agent.run("https://example.com にアクセスしてタイトルを取得")
+pip install playwright fake-useragent aiohttp python-dotenv loguru pydantic
 ```
