@@ -40,6 +40,20 @@ from .learn import (
     KnowledgeStore, KnowledgeEntry,
     PatternDetector, Pattern, Anomaly,
     PerformanceAnalyzer, PerformanceReport,
+    # v2 Experience Store
+    ExperienceStore, Experience, OutcomeStatus,
+    DefaultRewardModel,
+    # v2 Replay Engine
+    ReplayEngine, ReplayConfig, EpisodeResult,
+)
+
+# v2 Protocols
+from .protocols import (
+    SafetyPolicy, DomainAdapter, RewardModel,
+    Policy, Planner, Evaluator,
+    Authorization, AuthorizationStatus,
+    Plan, Decision as PolicyDecision, DecisionContext as PolicyContext,
+    EvaluationResult,
 )
 
 # CCP Orchestrator
@@ -101,6 +115,28 @@ __all__ = [
     "Anomaly",
     "PerformanceAnalyzer",
     "PerformanceReport",
+    # v2 Experience Store
+    "ExperienceStore",
+    "Experience",
+    "OutcomeStatus",
+    "DefaultRewardModel",
+    # v2 Replay Engine
+    "ReplayEngine",
+    "ReplayConfig",
+    "EpisodeResult",
+    # v2 Protocols
+    "SafetyPolicy",
+    "DomainAdapter",
+    "RewardModel",
+    "Policy",
+    "Planner",
+    "Evaluator",
+    "Authorization",
+    "AuthorizationStatus",
+    "Plan",
+    "PolicyDecision",
+    "PolicyContext",
+    "EvaluationResult",
     # CCP
     "CCPOrchestrator",
     "SenseLayer",

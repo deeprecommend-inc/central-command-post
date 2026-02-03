@@ -192,3 +192,275 @@ class KnowledgeStore:
             "avg_confidence": sum(confidences) / len(confidences),
             "sources": sources,
         }
+
+
+class VectorKnowledgeStore(KnowledgeStore):
+    """
+    Knowledge store with vector similarity search.
+
+    Extends KnowledgeStore with semantic search capabilities using
+    vector embeddings. Falls back to key-based search if vector
+    store is not available.
+
+    Example:
+        store = VectorKnowledgeStore(
+            vector_backend="chroma",
+            persist_directory="./knowledge_db",
+        )
+
+        # Store with automatic indexing
+        store.store(KnowledgeEntry(
+            key="proxy.residential.best_country",
+            value="us",
+            confidence=0.9,
+            metadata={"description": "US residential proxies have highest success rate"}
+        ))
+
+        # Semantic search
+        results = store.semantic_search("best proxy for web scraping")
+        for entry, score in results:
+            print(f"{entry.key}: {entry.value} (similarity: {score:.2f})")
+    """
+
+    def __init__(
+        self,
+        max_entries: int = 1000,
+        vector_backend: str = "memory",
+        collection_name: str = "ccp_knowledge",
+        persist_directory: Optional[str] = None,
+        **kwargs,
+    ):
+        super().__init__(max_entries)
+
+        self._vector_backend = vector_backend
+        self._collection_name = collection_name
+        self._persist_directory = persist_directory
+        self._vector_store = None
+        self._kwargs = kwargs
+
+    def _get_vector_store(self):
+        """Lazy initialization of vector store"""
+        if self._vector_store is not None:
+            return self._vector_store
+
+        try:
+            from .vector_store import create_vector_store
+
+            kwargs = {"collection_name": self._collection_name}
+            kwargs.update(self._kwargs)
+
+            if self._vector_backend == "chroma" and self._persist_directory:
+                kwargs["persist_directory"] = self._persist_directory
+
+            self._vector_store = create_vector_store(self._vector_backend, **kwargs)
+            logger.info(f"Vector store initialized: {self._vector_backend}")
+
+        except Exception as e:
+            logger.warning(f"Failed to initialize vector store: {e}")
+            self._vector_store = None
+
+        return self._vector_store
+
+    def store(self, entry: KnowledgeEntry) -> None:
+        """Store entry with vector indexing"""
+        super().store(entry)
+
+        # Index in vector store
+        vector_store = self._get_vector_store()
+        if vector_store:
+            try:
+                from .vector_store import VectorDocument
+
+                # Build content for embedding
+                content = self._entry_to_text(entry)
+
+                doc = VectorDocument(
+                    id=entry.key,
+                    content=content,
+                    metadata={
+                        "confidence": entry.confidence,
+                        "source": entry.source,
+                        **entry.metadata,
+                    },
+                )
+
+                vector_store.add(doc)
+
+            except Exception as e:
+                logger.warning(f"Failed to index entry in vector store: {e}")
+
+    def semantic_search(
+        self,
+        query: str,
+        limit: int = 10,
+        min_score: float = 0.3,
+        filter: Optional[dict] = None,
+    ) -> list[tuple[KnowledgeEntry, float]]:
+        """
+        Search entries by semantic similarity.
+
+        Args:
+            query: Search query
+            limit: Max results
+            min_score: Minimum similarity score
+            filter: Metadata filter
+
+        Returns:
+            List of (KnowledgeEntry, score) tuples
+        """
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            # Fallback to pattern search
+            logger.warning("Vector store not available, falling back to pattern search")
+            entries = self.search(f"*{query.split()[0]}*" if query else "*")
+            return [(e, 0.5) for e in entries[:limit]]
+
+        try:
+            results = vector_store.search(query, limit=limit, filter=filter)
+
+            matched = []
+            for result in results:
+                if result.score < min_score:
+                    continue
+
+                entry = self.query(result.document.id)
+                if entry:
+                    matched.append((entry, result.score))
+
+            return matched
+
+        except Exception as e:
+            logger.error(f"Semantic search failed: {e}")
+            return []
+
+    def find_similar(
+        self,
+        key: str,
+        limit: int = 5,
+    ) -> list[tuple[KnowledgeEntry, float]]:
+        """
+        Find entries similar to a given entry.
+
+        Args:
+            key: Key of entry to find similar entries for
+            limit: Max results
+
+        Returns:
+            List of (KnowledgeEntry, score) tuples
+        """
+        entry = self.query(key)
+        if not entry:
+            return []
+
+        content = self._entry_to_text(entry)
+        results = self.semantic_search(content, limit=limit + 1)
+
+        # Exclude the original entry
+        return [(e, s) for e, s in results if e.key != key][:limit]
+
+    def get_related_knowledge(
+        self,
+        context: str,
+        task_type: Optional[str] = None,
+        limit: int = 5,
+    ) -> str:
+        """
+        Get related knowledge as context string for LLM.
+
+        Args:
+            context: Task context or query
+            task_type: Optional task type filter
+            limit: Max entries to include
+
+        Returns:
+            Formatted context string
+        """
+        filter = {}
+        if task_type:
+            filter["task_type"] = task_type
+
+        results = self.semantic_search(context, limit=limit, filter=filter if filter else None)
+
+        if not results:
+            return "No relevant knowledge found."
+
+        lines = ["## Relevant Knowledge"]
+        for entry, score in results:
+            lines.append(
+                f"- {entry.key}: {entry.value} "
+                f"(confidence: {entry.confidence:.2f}, relevance: {score:.2f})"
+            )
+
+        return "\n".join(lines)
+
+    def _entry_to_text(self, entry: KnowledgeEntry) -> str:
+        """Convert entry to text for embedding"""
+        parts = [
+            f"Key: {entry.key}",
+            f"Value: {entry.value}",
+            f"Source: {entry.source}",
+        ]
+
+        if entry.metadata:
+            for k, v in entry.metadata.items():
+                if isinstance(v, (str, int, float, bool)):
+                    parts.append(f"{k}: {v}")
+
+        return " | ".join(parts)
+
+    def rebuild_index(self) -> int:
+        """
+        Rebuild vector index from all stored entries.
+
+        Returns:
+            Number of entries indexed
+        """
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return 0
+
+        # Clear existing index
+        try:
+            vector_store.clear()
+        except Exception:
+            pass
+
+        # Re-index all entries
+        count = 0
+        for key in self.keys():
+            entry = self._store.get(key)
+            if entry:
+                try:
+                    from .vector_store import VectorDocument
+
+                    content = self._entry_to_text(entry)
+                    doc = VectorDocument(
+                        id=entry.key,
+                        content=content,
+                        metadata={
+                            "confidence": entry.confidence,
+                            "source": entry.source,
+                            **entry.metadata,
+                        },
+                    )
+                    vector_store.add(doc)
+                    count += 1
+                except Exception:
+                    pass
+
+        logger.info(f"Rebuilt vector index: {count} entries")
+        return count
+
+    def get_stats(self) -> dict:
+        """Get store statistics including vector store"""
+        stats = super().get_stats()
+
+        vector_store = self._get_vector_store()
+        if vector_store:
+            stats["vector_backend"] = self._vector_backend
+            stats["vector_indexed"] = vector_store.count()
+        else:
+            stats["vector_backend"] = None
+            stats["vector_indexed"] = 0
+
+        return stats

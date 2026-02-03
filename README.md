@@ -234,6 +234,103 @@ print(f"Recommendations: {report.recommendations}")
 
 ---
 
+## API Server
+
+FastAPIベースのREST/WebSocket APIサーバー。
+
+### サーバー起動
+
+```bash
+# 基本起動
+python server.py
+
+# ポート指定
+python server.py --port 8080
+
+# 開発モード（自動リロード）
+python server.py --reload
+
+# 複数ワーカー
+python server.py --workers 4
+```
+
+### API使用例
+
+```python
+import httpx
+
+# タスク実行
+response = httpx.post("http://localhost:8000/tasks", json={
+    "target": "https://example.com",
+    "task_type": "navigate",
+})
+task = response.json()
+print(f"Task ID: {task['task_id']}")
+
+# LangGraphワークフロー実行
+response = httpx.post("http://localhost:8000/workflow", json={
+    "target": "https://example.com",
+    "task_type": "navigate",
+    "enable_approval": True,
+    "confidence_threshold": 0.7,
+})
+workflow = response.json()
+print(f"Workflow: {workflow['cycle_id']}")
+
+# 承認待ちリスト取得
+response = httpx.get("http://localhost:8000/approvals")
+approvals = response.json()
+for req in approvals["requests"]:
+    print(f"Pending: {req['request_id']} - {req['decision_action']}")
+
+# 承認
+httpx.post(f"http://localhost:8000/approvals/{request_id}/approve", json={
+    "approved_by": "user@example.com",
+    "reason": "Looks safe",
+})
+
+# 思考チェーン取得
+response = httpx.get("http://localhost:8000/thoughts")
+thoughts = response.json()
+for chain in thoughts["chains"]:
+    print(f"Chain: {chain['cycle_id']} - {len(chain['steps'])} steps")
+```
+
+### WebSocket（リアルタイムイベント）
+
+```python
+import asyncio
+import websockets
+
+async def listen_events():
+    async with websockets.connect("ws://localhost:8000/ws/events") as ws:
+        while True:
+            event = await ws.recv()
+            print(f"Event: {event}")
+
+asyncio.run(listen_events())
+```
+
+### 主要エンドポイント
+
+| Method | Path | 説明 |
+|--------|------|------|
+| GET | `/` | API情報 |
+| GET | `/health` | ヘルスチェック |
+| GET | `/stats` | 統計情報 |
+| POST | `/tasks` | タスク作成 |
+| POST | `/workflow` | ワークフロー実行 |
+| GET | `/approvals` | 承認待ちリスト |
+| POST | `/approvals/{id}/approve` | 承認 |
+| POST | `/approvals/{id}/reject` | 拒否 |
+| GET | `/thoughts` | 思考チェーン一覧 |
+| GET | `/experiences` | 経験一覧 |
+| WS | `/ws/events` | イベントストリーム |
+
+OpenAPI Docs: `http://localhost:8000/docs`
+
+---
+
 ## CLI
 
 ### 基本コマンド
@@ -283,6 +380,34 @@ python run.py url --json https://example.com
 # 詳細ログ（DEBUG）
 python run.py url -v https://example.com
 ```
+
+### browser-use（AIブラウザ操作）
+
+プロキシ/UA設定なしでbrowser-useを直接実行する。
+
+```bash
+# 基本（GPT-4o）
+python browse.py "Go to google.com and search for python"
+
+# ブラウザ表示（headlessオフ）
+python browse.py --show "Open https://example.com"
+
+# モデル指定
+python browse.py --model claude-sonnet-4-20250514 "Search for AI news"
+python browse.py --model gpt-4o-mini "Get the title of https://example.com"
+```
+
+オプション:
+- `--show` - ブラウザ表示（headlessオフ）
+- `--model <model>` - LLMモデル指定（デフォルト: gpt-4o）
+
+対応モデル:
+- GPT: gpt-4o, gpt-4o-mini, o1, o3-mini
+- Claude: claude-sonnet-4-20250514, claude-opus-4-20250514
+
+環境変数:
+- `OPENAI_API_KEY` - GPT/o1/o3モデル使用時
+- `ANTHROPIC_API_KEY` - Claudeモデル使用時
 
 ---
 
@@ -364,6 +489,402 @@ python run.py url -v https://example.com
 
 ---
 
+## CCP v2 機能
+
+### Experience Store（経験ストア）
+
+学習の基盤となる(State, Action, Outcome, Reward)タプルを保存。
+
+```python
+from src.learn import ExperienceStore, StateSnapshot, Action, Outcome, OutcomeStatus
+from datetime import datetime
+
+store = ExperienceStore(max_size=10000)
+
+# 経験を記録
+state = StateSnapshot(timestamp=datetime.now(), features={"cpu": 0.5})
+action = Action(action_type="navigate", params={"url": "https://example.com"})
+outcome = Outcome(status=OutcomeStatus.SUCCESS, result={"title": "Example"}, duration_ms=150)
+
+exp = store.record(state, action, outcome)
+
+# 統計取得
+stats = store.get_statistics()
+print(f"Success rate: {stats['success_rate']:.1%}")
+
+# ファイルに保存/読み込み
+store.save_to_file("experiences.json")
+store.load_from_file("experiences.json")
+```
+
+### Replay Engine（リプレイエンジン）
+
+過去の経験を使ってポリシーを評価・比較。
+
+```python
+from src.learn import ReplayEngine, ReplayConfig
+
+engine = ReplayEngine(experience_store)
+
+# ポリシー評価
+result = await engine.replay(my_policy, episodes=10)
+print(f"Avg reward: {result.avg_reward}")
+
+# 複数ポリシー比較
+results = await engine.compare_policies([policy_a, policy_b])
+print(f"Best: {results[0].policy_id}")
+```
+
+### シミュレーションCLI
+
+```bash
+# 経験ファイルの統計
+python simulate.py stats experiences.json
+
+# ポリシーでリプレイ
+python simulate.py replay experiences.json --episodes 20
+
+# 複数ポリシー比較
+python simulate.py compare experiences.json --episodes 10
+```
+
+### Protocol Interfaces（v2用インターフェース）
+
+ドメイン横断のための抽象インターフェース。
+
+```python
+from src.protocols import SafetyPolicy, DomainAdapter, RewardModel, Policy, Planner
+
+# ドメインアダプター（軍事/プラント/金融で差し替え）
+class MyDomainAdapter:
+    async def execute(self, action: Action) -> Outcome: ...
+    async def observe(self) -> StateSnapshot: ...
+    def capabilities(self) -> list[str]: ...
+
+# 安全ポリシー
+class MySafetyPolicy:
+    def authorize(self, plan, state) -> Authorization: ...
+    def risk_score(self, plan, state) -> float: ...
+    def kill_switch(self) -> bool: ...
+```
+
+### LangGraph Workflow（v2 Think層）
+
+LangGraphベースのステートフルワークフロー。LLMが判断し、低信頼度時はHuman-in-the-Loopで承認を待つ。
+
+```python
+from src.think import CCPGraphWorkflow, LLMConfig, ApprovalConfig
+
+# ワークフロー作成
+workflow = CCPGraphWorkflow(
+    llm_config=LLMConfig(provider="openai", model="gpt-4o"),
+    approval_config=ApprovalConfig(confidence_threshold=0.7),
+    thought_log_dir="logs/thoughts",
+)
+
+# 承認ハンドラ登録（Slack/Teams通知など）
+async def approval_handler(request):
+    print(f"Approval needed: {request.decision.action}")
+
+workflow.on_approval_request(approval_handler)
+
+# レイヤー実行関数を設定
+workflow.set_sense_executor(my_sense_fn)
+workflow.set_command_executor(my_command_fn)
+
+# ワークフロー実行
+result = await workflow.run(
+    task_id="task_001",
+    task_type="navigate",
+    target="https://example.com",
+)
+
+print(f"Success: {result['final_success']}")
+print(f"Thought steps: {len(result['thought_chain'])}")
+```
+
+### Human-in-the-Loop（承認ワークフロー）
+
+低信頼度の判断に対して人間の承認を待つ。
+
+```python
+from src.think import HumanApprovalManager, ApprovalConfig, Decision
+
+manager = HumanApprovalManager(ApprovalConfig(
+    confidence_threshold=0.7,
+    auto_approve_above=0.9,
+    default_timeout=300.0,
+))
+
+# 承認が必要か確認
+decision = Decision(action="proceed", confidence=0.5)
+if manager.needs_approval(decision):
+    request = manager.create_request("task_001", decision, state)
+
+    # 非同期で承認を待つ
+    status = await manager.wait_for_approval(request)
+
+    if status == ApprovalStatus.APPROVED:
+        # 実行続行
+        pass
+
+# 外部から承認/拒否
+manager.approve(request_id, "user@example.com", "Looks good")
+manager.reject(request_id, "user@example.com", "Risk too high")
+```
+
+### Chain of Thought Logging
+
+全ての思考プロセスを記録し、後から分析可能。
+
+```python
+from src.think import ThoughtLogger, ThoughtChain
+
+logger = ThoughtLogger(log_dir="logs/thoughts", auto_save=True)
+
+# チェーン開始
+chain = logger.start_chain(task_id="task_001")
+
+# ステップ記録（ワークフロー内で自動）
+logger.log_step(chain.cycle_id, thought_step)
+logger.log_transition(chain.cycle_id, CCPPhase.SENSE, CCPPhase.THINK, "data_collected")
+
+# 完了
+logger.complete_chain(chain.cycle_id, decision_dict, outcome_dict)
+
+# 統計
+stats = logger.get_stats()
+print(f"Avg duration: {stats['avg_duration_ms']:.0f}ms")
+```
+
+### Vector Store & RAG（v3 Learn層）
+
+ベクトルデータベースによる意味的検索とRAG（Retrieval Augmented Generation）。
+
+```python
+from src.learn import (
+    VectorKnowledgeStore,
+    RAGRetriever,
+    RAGConfig,
+    create_vector_store,
+)
+
+# ベクトル対応KnowledgeStore
+store = VectorKnowledgeStore(
+    vector_backend="chroma",  # memory, chroma, qdrant
+    persist_directory="./knowledge_db",
+)
+
+# 知識を保存（自動的にベクトル化）
+store.store(KnowledgeEntry(
+    key="proxy.residential.best_country",
+    value="us",
+    metadata={"description": "US has highest success rate"},
+))
+
+# 意味的検索
+results = store.semantic_search("best proxy for scraping")
+for entry, score in results:
+    print(f"{entry.key}: {entry.value} (similarity: {score:.2f})")
+
+# RAGリトリーバー（経験ベース学習）
+retriever = RAGRetriever(RAGConfig(
+    vector_backend="chroma",
+    top_k=5,
+    min_score=0.3,
+))
+
+# 経験をインデックス
+retriever.index_experiences(experience_store)
+
+# 類似経験を取得
+result = retriever.retrieve(
+    query="Navigate to https://example.com",
+    filter={"task_type": "navigate"},
+)
+
+# LLMプロンプトにコンテキスト注入
+print(result.context_text)
+```
+
+### Redis分散化（v4 Sense/Control層）
+
+Redis Pub/Subによる分散イベントバスと状態キャッシュ。
+
+```python
+from src.sense import RedisEventBus, Event, create_event_bus
+from src.control import RedisStateCache, CachedTaskState, CacheTaskState, create_state_cache
+
+# 分散イベントバス
+bus = create_event_bus(backend="redis", redis_url="redis://localhost:6379")
+
+async def on_task_complete(event: Event):
+    print(f"Task completed: {event.data}")
+
+bus.subscribe("task.completed", on_task_complete)
+
+# リスナー開始（バックグラウンド）
+asyncio.create_task(bus.start_listening())
+
+# イベント発行（全インスタンスに配信）
+await bus.publish(Event("task.completed", "worker", {"task_id": "123"}))
+
+# 状態キャッシュ（クラッシュリカバリ対応）
+cache = create_state_cache(backend="redis", redis_url="redis://localhost:6379")
+
+# タスク状態を保存
+state = CachedTaskState(
+    task_id="task_001",
+    state=CacheTaskState.RUNNING,
+    target="https://example.com",
+    task_type="navigate",
+    worker_id="worker_1",
+)
+await cache.save(state)
+
+# クラッシュ後のリカバリ
+recovered = await cache.recover_running_tasks(worker_id="worker_1")
+for task in recovered:
+    print(f"Recovering: {task.task_id}")
+
+# 分散ロック
+if await cache.acquire_lock("task_001", "worker_1", ttl=60):
+    try:
+        # 排他処理
+        pass
+    finally:
+        await cache.release_lock("task_001", "worker_1")
+```
+
+### Stealth Browser（v5 Command層）
+
+アンチディテクト対策のステルスブラウザ。
+
+```python
+from src.command import StealthConfig, StealthBrowser
+
+# ステルス設定
+config = StealthConfig(
+    canvas_noise=True,           # Canvas指紋ランダム化
+    webgl_spoof=True,           # WebGL偽装
+    audio_noise=True,           # Audio指紋ノイズ
+    navigator_spoof=True,       # Navigator偽装
+    webrtc_block=True,          # WebRTCリーク防止
+    timezone="America/New_York", # タイムゾーン偽装
+)
+
+stealth = StealthBrowser(config)
+
+async with async_playwright() as p:
+    browser = await p.chromium.launch(
+        args=stealth.get_launch_args()
+    )
+    context = await browser.new_context(
+        **stealth.get_context_options()
+    )
+
+    # ステルススクリプト適用
+    await stealth.apply_to_context(context)
+
+    page = await context.new_page()
+    await page.goto("https://example.com")
+```
+
+### Human-like Behavior（v5 Command層）
+
+人間らしい操作を模倣するマウス/キーボード/スクロール動作。
+
+```python
+from src.command import BehaviorConfig, HumanBehavior
+
+config = BehaviorConfig(
+    mouse_speed="normal",      # slow, normal, fast
+    typing_speed="normal",
+    typo_rate=0.02,            # タイポ率
+    enable_typos=True,         # タイポ有効化
+)
+
+behavior = HumanBehavior(config)
+
+# 人間らしいマウス移動（ベジェ曲線）
+await behavior.mouse.move_to(page, 500, 300)
+await behavior.mouse.click(page, 500, 300)
+
+# 要素へ移動してクリック
+await behavior.mouse.move_to_element(page, "button#submit")
+await behavior.mouse.click_element(page, "button#submit")
+
+# 人間らしいタイピング（タイポ＋修正込み）
+await behavior.typing.type_text(page, "Hello World", "input#name")
+
+# 自然なスクロール
+await behavior.scroll.scroll_to_bottom(page)
+await behavior.scroll.scroll_to_element(page, "#footer")
+```
+
+### CAPTCHA Solver（v5 Command層）
+
+CAPTCHA自動検出と解決サービス連携。
+
+```python
+from src.command import (
+    CaptchaDetector,
+    CaptchaMiddleware,
+    TwoCaptchaSolver,
+    create_captcha_solver,
+)
+
+# ソルバー作成
+solver = create_captcha_solver(
+    provider="2captcha",  # or "anti-captcha"
+    api_key="your_api_key",
+)
+
+# 残高確認
+balance = await solver.get_balance()
+print(f"Balance: ${balance}")
+
+# 手動検出と解決
+detector = CaptchaDetector()
+captcha = await detector.detect(page)
+
+if captcha:
+    print(f"Found: {captcha.captcha_type}")
+    solution = await solver.solve(captcha)
+    if solution.success:
+        print(f"Token: {solution.token}")
+
+# 自動ミドルウェア（検出と解決を自動化）
+middleware = CaptchaMiddleware(
+    solver=solver,
+    auto_solve=True,
+    max_retries=3,
+)
+
+await middleware.attach(context)
+
+# 以降、CAPTCHAが自動解決される
+await page.goto("https://protected-site.com")
+```
+
+### Docker Compose
+
+```bash
+# 基本起動（ChromaDB）
+docker-compose up -d
+
+# Qdrantを使用
+docker-compose --profile qdrant up -d
+
+# フルスタック（Redis含む）
+docker-compose --profile full up -d
+
+# ログ確認
+docker-compose logs -f ccp-api
+```
+
+---
+
 ## テスト
 
 ```bash
@@ -386,25 +907,47 @@ pytest tests/test_ccp.py -v
 ## ファイル構成
 
 ```
+run.py                       # CLI エントリポイント
+browse.py                    # browser-use シンプル実行
+simulate.py                  # v2 シミュレーションCLI
+server.py                    # API Server エントリポイント
 src/
 ├── ccp.py                   # CCPOrchestrator
+├── protocols.py             # v2 Protocol Interfaces
+├── api/                     # API Server
+│   ├── models.py            # Pydantic Models
+│   └── server.py            # FastAPI Server
 ├── sense/                   # Sense層
-│   ├── event_bus.py
+│   ├── event_bus.py         # + RedisEventBus (v4)
 │   ├── metrics_collector.py
 │   └── state_snapshot.py
 ├── think/                   # Think層
 │   ├── strategy.py
 │   ├── rules_engine.py
-│   └── decision_context.py
+│   ├── decision_context.py
+│   ├── agent_state.py       # v2 LangGraph State
+│   ├── llm_decision.py      # v2 LLM Decision Maker
+│   ├── human_in_loop.py     # v2 Human-in-the-Loop
+│   ├── thought_log.py       # v2 Chain of Thought Log
+│   └── graph_workflow.py    # v2 LangGraph Workflow
+├── command/                 # Command層
+│   ├── stealth.py           # v5 Stealth Browser
+│   ├── human_behavior.py    # v5 Human-like Behavior
+│   └── captcha_solver.py    # v5 CAPTCHA Solver
 ├── control/                 # Control層
 │   ├── executor.py
 │   ├── state_machine.py
+│   ├── state_cache.py       # v4 Redis State Cache
 │   └── feedback_loop.py
 ├── learn/                   # Learn層
-│   ├── knowledge_store.py
+│   ├── knowledge_store.py   # + VectorKnowledgeStore
 │   ├── pattern_detector.py
-│   └── performance_analyzer.py
-├── web_agent.py            # Command層
+│   ├── performance_analyzer.py
+│   ├── experience_store.py  # v2 Experience Store
+│   ├── replay_engine.py     # v2 Replay Engine
+│   ├── vector_store.py      # v3 Vector Store
+│   └── rag_retriever.py     # v3 RAG Retriever
+├── web_agent.py
 ├── proxy_manager.py
 ├── browser_worker.py
 ├── parallel_controller.py
@@ -416,10 +959,50 @@ src/
 
 ---
 
+## セットアップ
+
+### 仮想環境の作成
+
+```bash
+# venv作成
+python -m venv venv
+
+# 有効化（Linux/macOS）
+source venv/bin/activate
+
+# 有効化（Windows）
+venv\Scripts\activate
+```
+
+### 依存関係のインストール
+
+```bash
+# パッケージインストール
+pip install playwright browser-use langchain-openai langchain-anthropic fake-useragent aiohttp python-dotenv loguru pydantic
+
+# Playwrightブラウザのインストール
+playwright install
+
+# システム依存関係（Linux）
+playwright install-deps
+```
+
+### 環境変数の設定
+
+```bash
+cp .env.example .env
+# .envを編集して必要な値を設定
+```
+
+---
+
 ## 依存関係
 
 - Python 3.10+
 - playwright
+- browser-use
+- langchain-openai
+- langchain-anthropic
 - fake-useragent
 - aiohttp
 - python-dotenv

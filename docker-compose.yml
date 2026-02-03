@@ -1,0 +1,93 @@
+version: "3.8"
+
+services:
+  # =============================================================================
+  # CCP API Server
+  # =============================================================================
+  ccp-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - VECTOR_BACKEND=chroma
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8001
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - LOG_LEVEL=INFO
+      - HEADLESS=true
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      - chromadb
+    networks:
+      - ccp-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # ChromaDB - Vector Database (Default)
+  # =============================================================================
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    networks:
+      - ccp-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # Qdrant - Vector Database (Alternative)
+  # =============================================================================
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    networks:
+      - ccp-network
+    restart: unless-stopped
+    profiles:
+      - qdrant  # Only start with --profile qdrant
+
+  # =============================================================================
+  # Redis - Pub/Sub & Cache (Phase 4)
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - ccp-network
+    restart: unless-stopped
+    profiles:
+      - full  # Only start with --profile full
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  ccp-network:
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  chroma-data:
+  qdrant-data:
+  redis-data:
