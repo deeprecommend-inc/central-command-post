@@ -21,7 +21,18 @@ CCP integrates scattered data, fragmented decisions, and manual operations into 
 - Python 3.10+
 - A local LLM server (Ollama, LM Studio, vLLM, etc.) **or** a cloud API key (OpenAI / Anthropic)
 
-### Install
+### Install (macOS / Ubuntu / WSL2)
+
+```bash
+# One-command setup: installs all dependencies, Ollama, default model, and Playwright
+./setup.sh
+
+# Options
+./setup.sh --model hermes3     # Pull a different model
+./setup.sh --skip-model        # Skip model download
+```
+
+Or install manually:
 
 ```bash
 pip install -r requirements.txt
@@ -33,16 +44,17 @@ cp .env.example .env
 ### Option A: Run with a local LLM (no API key)
 
 ```bash
-# 1. Install and start Ollama
-curl -fsSL https://ollama.com/install.sh | sh
+# If you used setup.sh, Ollama and dolphin3 are already installed.
+# Otherwise:
+#   macOS:        brew install ollama
+#   Ubuntu/WSL2:  curl -fsSL https://ollama.com/install.sh | sh
 ollama serve
 
-# 2. Pull a model
-ollama pull dolphin3        # Dolphin 3.0 (8B) -- recommended
+# Pull additional models (optional)
 ollama pull hermes3         # Nous Hermes 3 (8B)
 ollama pull mythomax        # MythoMax-L2 (13B)
 
-# 3. Run
+# Run
 python run.py ai --local --no-proxy "Go to example.com and get the page title"
 ```
 
@@ -129,11 +141,26 @@ Supported cloud models: gpt-4o, gpt-4o-mini, o1, o3-mini, claude-sonnet-4-202505
 
 ### Proxy Rotation
 
-Rotate through residential, mobile, datacenter, or ISP IPs via BrightData. Optional -- runs with direct connection if not configured.
+Rotate through residential, mobile, datacenter, or ISP IPs via multiple proxy providers. Optional -- runs with direct connection if not configured.
+
+Supported providers:
+
+| Provider | Pricing | Best For |
+|----------|---------|----------|
+| GeoNode | $49/mo unlimited | High-volume (recommended) |
+| DataImpulse | $1/GB residential, $2/GB mobile | Pay-per-use |
+| BrightData | $4-5/GB residential | Premium quality |
+| Generic | Any HTTP/SOCKS5 proxy URL | Custom proxies |
 
 ```bash
-# Residential IP (default)
+# Residential IP (default provider: brightdata)
 python run.py url -r https://example.com
+
+# Use GeoNode (unlimited bandwidth)
+python run.py url --proxy-provider geonode https://example.com
+
+# Use DataImpulse (cheapest per-GB)
+python run.py url --proxy-provider dataimpulse https://example.com
 
 # Mobile IP
 python run.py url -m https://mobile-only-site.com
@@ -147,6 +174,20 @@ python run.py url --no-proxy https://example.com
 # Health check
 python run.py health
 ```
+
+### Antidetect Browser (AdsPower)
+
+Use AdsPower's fingerprint browser for unique browser profiles per session. Free tier includes 2 profiles with API access.
+
+```bash
+# Run AI agent with AdsPower fingerprint browser
+python run.py ai --adspower "Go to example.com and get the title" --no-proxy
+
+# Combine with proxy provider
+python run.py ai --adspower --proxy-provider geonode "Navigate to site and extract data"
+```
+
+Requires AdsPower desktop app running locally (API at `http://local.adspower.com:50325`).
 
 ### CAPTCHA Solving
 
@@ -275,7 +316,9 @@ print(f"{valid} valid, {invalid} invalid")
 | `--mobile` | `-m` | Mobile IP |
 | `--datacenter` | `-d` | Datacenter IP |
 | `--isp` | `-i` | ISP IP |
-| `--no-proxy` | | Direct connection (no BrightData) |
+| `--no-proxy` | | Direct connection (no proxy) |
+| `--proxy-provider <name>` | | `brightdata`, `dataimpulse`, `geonode`, `generic` |
+| `--adspower` | | Use AdsPower fingerprint browser |
 | `--captcha-solver <type>` | | `vision` (default), `2captcha`, `anti-captcha` |
 | `--json` | | JSON log output |
 | `-v` | | Verbose logging (DEBUG) |
@@ -335,11 +378,24 @@ docker-compose logs -f ccp-api             # View logs
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `BRIGHTDATA_USERNAME` | No | BrightData username (direct connection if unset) |
-| `BRIGHTDATA_PASSWORD` | No | BrightData password |
+| `PROXY_PROVIDER` | No | `brightdata`, `dataimpulse`, `geonode`, `generic` (default: `brightdata`) |
+| `PROXY_USERNAME` | No | Proxy username (provider-agnostic) |
+| `PROXY_PASSWORD` | No | Proxy password (provider-agnostic) |
+| `PROXY_HOST` | No | Proxy host (provider-agnostic) |
+| `PROXY_PORT` | No | Proxy port (provider-agnostic) |
+| `BRIGHTDATA_USERNAME` | No | BrightData username (legacy fallback) |
+| `BRIGHTDATA_PASSWORD` | No | BrightData password (legacy fallback) |
 | `BRIGHTDATA_PROXY_TYPE` | No | `residential` / `datacenter` / `mobile` / `isp` |
 | `PARALLEL_SESSIONS` | No | Parallel sessions (default: 5) |
 | `HEADLESS` | No | Headless mode (default: true) |
+
+### Antidetect Browser
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ANTIDETECT` | No | `none` (default) or `adspower` |
+| `ADSPOWER_API_BASE` | No | AdsPower Local API URL (default: `http://local.adspower.com:50325`) |
+| `ADSPOWER_PROFILE_ID` | No | Profile ID (auto-select if empty) |
 
 ### CAPTCHA
 

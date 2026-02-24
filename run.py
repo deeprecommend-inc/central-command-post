@@ -35,6 +35,8 @@ def parse_args(args: list[str]) -> tuple[str, list[str], dict]:
         "llm_provider": get_env("LLM_PROVIDER", "openai"),
         "llm_base_url": get_env("LLM_BASE_URL", ""),
         "llm_model": get_env("LLM_MODEL", ""),
+        "proxy_provider": get_env("PROXY_PROVIDER", "brightdata"),
+        "antidetect": get_env("ANTIDETECT", "none"),
     }
 
     i = 0
@@ -51,6 +53,13 @@ def parse_args(args: list[str]) -> tuple[str, list[str], dict]:
         elif arg == "--no-proxy":
             os.environ["BRIGHTDATA_USERNAME"] = ""
             os.environ["BRIGHTDATA_PASSWORD"] = ""
+            os.environ["PROXY_USERNAME"] = ""
+            os.environ["PROXY_PASSWORD"] = ""
+        elif arg == "--proxy-provider" and i + 1 < len(args):
+            i += 1
+            options["proxy_provider"] = args[i]
+        elif arg == "--adspower":
+            options["antidetect"] = "adspower"
         elif arg == "--json":
             options["json"] = True
         elif arg in ["--verbose", "-v"]:
@@ -79,12 +88,17 @@ def parse_args(args: list[str]) -> tuple[str, list[str], dict]:
     return proxy_type, remaining_args, options
 
 
-async def run_basic_agent(urls: list[str], proxy_type: str = "residential"):
+async def run_basic_agent(urls: list[str], proxy_type: str = "residential", proxy_provider: str = "brightdata"):
     """Run basic Playwright agent without AI"""
     from src import WebAgent
     from src.web_agent import AgentConfig
 
     config = AgentConfig(
+        proxy_provider=proxy_provider,
+        proxy_username=get_env("PROXY_USERNAME"),
+        proxy_password=get_env("PROXY_PASSWORD"),
+        proxy_host=get_env("PROXY_HOST"),
+        proxy_port=int(get_env("PROXY_PORT", "0")),
         brightdata_username=get_env("BRIGHTDATA_USERNAME"),
         brightdata_password=get_env("BRIGHTDATA_PASSWORD"),
         brightdata_host=get_env("BRIGHTDATA_HOST", "brd.superproxy.io"),
@@ -118,23 +132,28 @@ async def run_basic_agent(urls: list[str], proxy_type: str = "residential"):
             logger.info(f"Proxy stats: {stats}")
 
 
-async def run_health_check(proxy_type: str = "residential"):
+async def run_health_check(proxy_type: str = "residential", proxy_provider: str = "brightdata"):
     """Run proxy health check"""
     from src import WebAgent
     from src.web_agent import AgentConfig
     import json
 
-    username = get_env("BRIGHTDATA_USERNAME")
-    password = get_env("BRIGHTDATA_PASSWORD")
+    username = get_env("PROXY_USERNAME") or get_env("BRIGHTDATA_USERNAME")
+    password = get_env("PROXY_PASSWORD") or get_env("BRIGHTDATA_PASSWORD")
 
     if not username or not password:
-        logger.warning("BRIGHTDATA credentials not set. Health check requires proxy configuration.")
+        logger.warning("Proxy credentials not set. Health check requires proxy configuration.")
         print("\nProxy Status: Not configured (direct connection mode)")
         return
 
     config = AgentConfig(
-        brightdata_username=username,
-        brightdata_password=password,
+        proxy_provider=proxy_provider,
+        proxy_username=get_env("PROXY_USERNAME"),
+        proxy_password=get_env("PROXY_PASSWORD"),
+        proxy_host=get_env("PROXY_HOST"),
+        proxy_port=int(get_env("PROXY_PORT", "0")),
+        brightdata_username=get_env("BRIGHTDATA_USERNAME"),
+        brightdata_password=get_env("BRIGHTDATA_PASSWORD"),
         brightdata_host=get_env("BRIGHTDATA_HOST", "brd.superproxy.io"),
         brightdata_port=int(get_env("BRIGHTDATA_PORT", "22225")),
         proxy_type=proxy_type,
@@ -169,6 +188,8 @@ async def run_ai_agent(
     llm_provider: str = "openai",
     llm_base_url: str = "",
     llm_model: str = "",
+    proxy_provider: str = "brightdata",
+    antidetect: str = "none",
 ):
     """Run AI-driven browser-use agent with CAPTCHA support"""
     from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
@@ -182,11 +203,19 @@ async def run_ai_agent(
     model = llm_model or get_env("OPENAI_MODEL", "gpt-4o")
 
     config = BrowserUseConfig(
+        proxy_provider=proxy_provider,
+        proxy_username=get_env("PROXY_USERNAME"),
+        proxy_password=get_env("PROXY_PASSWORD"),
+        proxy_host=get_env("PROXY_HOST"),
+        proxy_port=int(get_env("PROXY_PORT", "0")),
         brightdata_username=get_env("BRIGHTDATA_USERNAME"),
         brightdata_password=get_env("BRIGHTDATA_PASSWORD"),
         brightdata_host=get_env("BRIGHTDATA_HOST", "brd.superproxy.io"),
         brightdata_port=int(get_env("BRIGHTDATA_PORT", "22225")),
         proxy_type=proxy_type,
+        antidetect=antidetect,
+        adspower_api_base=get_env("ADSPOWER_API_BASE", "http://local.adspower.com:50325"),
+        adspower_profile_id=get_env("ADSPOWER_PROFILE_ID", ""),
         llm_provider=llm_provider,
         llm_api_key=api_key,
         llm_base_url=llm_base_url,
@@ -220,6 +249,8 @@ async def run_parallel_ai(
     llm_provider: str = "openai",
     llm_base_url: str = "",
     llm_model: str = "",
+    proxy_provider: str = "brightdata",
+    antidetect: str = "none",
 ):
     """Run multiple AI tasks in parallel with CAPTCHA support"""
     from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
@@ -232,11 +263,19 @@ async def run_parallel_ai(
     model = llm_model or get_env("OPENAI_MODEL", "gpt-4o")
 
     config = BrowserUseConfig(
+        proxy_provider=proxy_provider,
+        proxy_username=get_env("PROXY_USERNAME"),
+        proxy_password=get_env("PROXY_PASSWORD"),
+        proxy_host=get_env("PROXY_HOST"),
+        proxy_port=int(get_env("PROXY_PORT", "0")),
         brightdata_username=get_env("BRIGHTDATA_USERNAME"),
         brightdata_password=get_env("BRIGHTDATA_PASSWORD"),
         brightdata_host=get_env("BRIGHTDATA_HOST", "brd.superproxy.io"),
         brightdata_port=int(get_env("BRIGHTDATA_PORT", "22225")),
         proxy_type=proxy_type,
+        antidetect=antidetect,
+        adspower_api_base=get_env("ADSPOWER_API_BASE", "http://local.adspower.com:50325"),
+        adspower_profile_id=get_env("ADSPOWER_PROFILE_ID", ""),
         llm_provider=llm_provider,
         llm_api_key=api_key,
         llm_base_url=llm_base_url,
@@ -330,6 +369,10 @@ Proxy Options:
   --datacenter, -d        Use datacenter IP
   --isp, -i               Use ISP IP
   --no-proxy              Disable proxy (direct connection)
+  --proxy-provider <name> Proxy provider: brightdata, dataimpulse, geonode, generic
+
+Antidetect Options:
+  --adspower              Use AdsPower fingerprint browser via Local API
 
 LLM Options:
   --local                 Use local LLM (Ollama/LM Studio/vLLM, no API key needed)
@@ -382,9 +425,17 @@ Environment Variables:
   OPENAI_API_KEY          OpenAI API key (legacy, fallback for LLM_API_KEY)
   OPENAI_MODEL            OpenAI model (legacy, fallback for LLM_MODEL)
   ANTHROPIC_API_KEY       Anthropic API key (for Claude models)
-  BRIGHTDATA_USERNAME     BrightData proxy username (optional)
-  BRIGHTDATA_PASSWORD     BrightData proxy password (optional)
+  PROXY_PROVIDER          Proxy provider: brightdata, dataimpulse, geonode, generic
+  PROXY_USERNAME          Proxy username (provider-agnostic)
+  PROXY_PASSWORD          Proxy password (provider-agnostic)
+  PROXY_HOST              Proxy host (provider-agnostic)
+  PROXY_PORT              Proxy port (provider-agnostic)
+  BRIGHTDATA_USERNAME     BrightData proxy username (legacy fallback)
+  BRIGHTDATA_PASSWORD     BrightData proxy password (legacy fallback)
   BRIGHTDATA_PROXY_TYPE   residential (default), datacenter, mobile, isp
+  ANTIDETECT              Antidetect browser: none (default), adspower
+  ADSPOWER_API_BASE       AdsPower Local API URL (default: http://local.adspower.com:50325)
+  ADSPOWER_PROFILE_ID     AdsPower profile ID (auto-select if empty)
   PARALLEL_SESSIONS       Max parallel sessions (default: 5)
   HEADLESS                Run headless (default: true)
   LOG_FORMAT              Logging format: json or text (default: text)
@@ -409,7 +460,13 @@ Supported Local LLM Servers:
   llama.cpp       http://localhost:8080/v1    llama-server -m <model>
   LocalAI         http://localhost:8080/v1    local-ai
 
-Note: BRIGHTDATA and LLM API keys are optional. Use --local for API-key-free operation.
+Proxy Providers:
+  brightdata      BrightData ($4-5/GB residential)
+  dataimpulse     DataImpulse ($1/GB residential, $2/GB mobile)
+  geonode         GeoNode ($49/mo unlimited residential)
+  generic         Any HTTP/SOCKS5 proxy URL
+
+Note: Proxy and LLM API keys are optional. Use --local for API-key-free operation.
 """)
 
 
@@ -507,19 +564,19 @@ async def run_list_channels():
         print(f"  [{ch['id']}] {ch['label']} - {ch['description']}")
 
 
-async def run_demo(proxy_type: str = "residential"):
+async def run_demo(proxy_type: str = "residential", proxy_provider: str = "brightdata"):
     """Run demo"""
     urls = [
         "https://httpbin.org/ip",
         "https://httpbin.org/user-agent",
         "https://httpbin.org/headers",
     ]
-    await run_basic_agent(urls, proxy_type)
+    await run_basic_agent(urls, proxy_type, proxy_provider)
 
 
-async def run_test(proxy_type: str = "residential"):
+async def run_test(proxy_type: str = "residential", proxy_provider: str = "brightdata"):
     """Quick test"""
-    await run_basic_agent(["https://httpbin.org/ip"], proxy_type)
+    await run_basic_agent(["https://httpbin.org/ip"], proxy_type, proxy_provider)
 
 
 def main():
@@ -538,14 +595,17 @@ def main():
     elif options["verbose"]:
         configure_logging(level="DEBUG", json_format=False)
 
+    pp = options["proxy_provider"]
+    ad = options["antidetect"]
+
     if command == "url":
         if len(args) < 1:
             print("Error: URL required")
             sys.exit(1)
-        asyncio.run(run_basic_agent(args, proxy_type))
+        asyncio.run(run_basic_agent(args, proxy_type, pp))
 
     elif command == "health":
-        asyncio.run(run_health_check(proxy_type))
+        asyncio.run(run_health_check(proxy_type, pp))
 
     elif command == "ai":
         if len(args) < 1:
@@ -555,6 +615,7 @@ def main():
         asyncio.run(run_ai_agent(
             task, proxy_type, options["captcha_solver"],
             options["llm_provider"], options["llm_base_url"], options["llm_model"],
+            pp, ad,
         ))
 
     elif command == "parallel":
@@ -564,6 +625,7 @@ def main():
         asyncio.run(run_parallel_ai(
             args, proxy_type, options["captcha_solver"],
             options["llm_provider"], options["llm_base_url"], options["llm_model"],
+            pp, ad,
         ))
 
     elif command == "score":
@@ -598,10 +660,10 @@ def main():
         run_vault(args)
 
     elif command == "demo":
-        asyncio.run(run_demo(proxy_type))
+        asyncio.run(run_demo(proxy_type, pp))
 
     elif command == "test":
-        asyncio.run(run_test(proxy_type))
+        asyncio.run(run_test(proxy_type, pp))
 
     elif command in ["-h", "--help", "help"]:
         print_usage()

@@ -1,11 +1,15 @@
 """
-Proxy Manager - BrightData proxy rotation management with health checking
+Proxy Manager - Multi-provider proxy rotation with health checking
+
+Supported providers:
+  - brightdata: BrightData ($4-5/GB residential)
+  - dataimpulse: DataImpulse ($1/GB residential, $2/GB mobile)
+  - generic: Any HTTP/SOCKS5 proxy URL
 """
 import asyncio
 import random
 import time
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Optional, TYPE_CHECKING
 from loguru import logger
 
@@ -18,32 +22,20 @@ except ImportError:
 if TYPE_CHECKING:
     from .sense import EventBus, MetricsCollector
 
-
-class ProxyType(Enum):
-    """BrightData proxy types"""
-    DATACENTER = "datacenter"
-    RESIDENTIAL = "residential"
-    MOBILE = "mobile"
-    ISP = "isp"
-
-
-@dataclass
-class ProxyConfig:
-    username: str
-    password: str
-    host: str = "brd.superproxy.io"
-    port: int = 22225
-    country: Optional[str] = None
-    session_id: Optional[str] = None
-    proxy_type: ProxyType = ProxyType.RESIDENTIAL
-
-    def get_url(self) -> str:
-        user = self.username
-        if self.country:
-            user = f"{user}-country-{self.country}"
-        if self.session_id:
-            user = f"{user}-session-{self.session_id}"
-        return f"http://{user}:{self.password}@{self.host}:{self.port}"
+from .proxy_provider import (
+    ProxyProvider,
+    ProxyType,
+    ProxyConfig,
+    ProxyProviderBackend,
+    BrightDataBackend,
+    DataImpulseBackend,
+    GeoNodeBackend,
+    GenericProxyBackend,
+    create_proxy_backend,
+    BRIGHTDATA_COUNTRIES,
+    DATAIMPULSE_COUNTRIES,
+    GEONODE_COUNTRIES,
+)
 
 
 @dataclass
@@ -91,9 +83,8 @@ class ProxyStats:
 
 
 class ProxyManager:
-    """Manages BrightData proxy rotation with health checking and smart rotation"""
+    """Manages multi-provider proxy rotation with health checking and smart rotation"""
 
-    COUNTRIES = ["us", "gb", "de", "fr", "jp", "au", "ca"]
     HEALTH_CHECK_URL = "https://httpbin.org/ip"
     HEALTH_CHECK_TIMEOUT = 10.0
     HEALTH_CHECK_INTERVAL = 300.0  # 5 minutes
@@ -102,18 +93,35 @@ class ProxyManager:
 
     def __init__(
         self,
-        username: str,
-        password: str,
+        backend: Optional[ProxyProviderBackend] = None,
+        # Legacy BrightData-compatible constructor args
+        username: str = "",
+        password: str = "",
         host: str = "brd.superproxy.io",
         port: int = 22225,
         proxy_type: ProxyType = ProxyType.RESIDENTIAL,
+        provider: str = "brightdata",
+        proxy_urls: Optional[list[str]] = None,
         event_bus: Optional["EventBus"] = None,
         metrics_collector: Optional["MetricsCollector"] = None,
     ):
-        self.username = username
-        self.password = password
-        self.host = host
-        self.port = port
+        # If backend is provided, use it directly
+        if backend:
+            self._backend = backend
+        elif username and password:
+            self._backend = create_proxy_backend(
+                provider=provider,
+                username=username,
+                password=password,
+                host=host,
+                port=port,
+                proxy_urls=proxy_urls,
+            )
+        elif proxy_urls:
+            self._backend = GenericProxyBackend(urls=proxy_urls)
+        else:
+            raise ValueError("Either backend, credentials, or proxy_urls required")
+
         self.proxy_type = proxy_type
         self._session_counter = 0
         self._country_index = 0
@@ -121,7 +129,33 @@ class ProxyManager:
         self._event_bus = event_bus
         self._metrics = metrics_collector
 
-        logger.info(f"ProxyManager initialized: type={proxy_type.value}, host={host}")
+        # Backward compat: expose credentials for BrightData/DataImpulse
+        self.username = username
+        self.password = password
+        self.host = host
+        self.port = port
+
+        provider_name = self._backend.provider_name.value
+        self.COUNTRIES = self._resolve_countries()
+        logger.info(f"ProxyManager initialized: provider={provider_name}, type={proxy_type.value}")
+
+    def _resolve_countries(self) -> list[str]:
+        """Get country list based on provider"""
+        if isinstance(self._backend, BrightDataBackend):
+            return BRIGHTDATA_COUNTRIES
+        elif isinstance(self._backend, DataImpulseBackend):
+            return DATAIMPULSE_COUNTRIES
+        elif isinstance(self._backend, GeoNodeBackend):
+            return GEONODE_COUNTRIES
+        return ["us"]  # generic fallback
+
+    @property
+    def backend(self) -> ProxyProviderBackend:
+        return self._backend
+
+    @property
+    def provider_name(self) -> str:
+        return self._backend.provider_name.value
 
     def _get_next_country(self) -> str:
         """Get next country in round-robin fashion for better distribution"""
@@ -157,11 +191,7 @@ class ProxyManager:
         if country is None:
             country = self._select_best_country(use_type)
 
-        proxy = ProxyConfig(
-            username=self.username,
-            password=self.password,
-            host=self.host,
-            port=self.port,
+        proxy = self._backend.create_proxy(
             country=country,
             session_id=session_id,
             proxy_type=use_type,
@@ -173,8 +203,8 @@ class ProxyManager:
         stats.last_used = time.time()
 
         logger.debug(
-            f"Created proxy config: type={use_type.value}, "
-            f"country={proxy.country}, session={proxy.session_id}"
+            f"Created proxy config: provider={self.provider_name}, "
+            f"type={use_type.value}, country={proxy.country}, session={proxy.session_id}"
         )
         return proxy
 
@@ -209,12 +239,11 @@ class ProxyManager:
         return best_country
 
     def get_rotating_proxy_url(self) -> str:
-        """Get a simple rotating proxy URL (BrightData handles rotation)"""
-        return f"http://{self.username}:{self.password}@{self.host}:{self.port}"
+        """Get a simple rotating proxy URL"""
+        return self._backend.get_rotating_url()
 
     def record_success(self, session_id: str, response_time: float = 0.0, country: Optional[str] = None) -> None:
         """Record successful request with response time"""
-        # Use session_id for backward compatibility, but also update country stats
         if session_id not in self._stats:
             self._stats[session_id] = ProxyStats()
 
@@ -243,7 +272,6 @@ class ProxyManager:
         # Publish event (async-safe)
         if self._event_bus:
             from .sense import Event
-            import asyncio
             event = Event(
                 event_type="proxy.success",
                 source="proxy_manager",
@@ -257,7 +285,7 @@ class ProxyManager:
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._event_bus.publish(event))
             except RuntimeError:
-                pass  # No running loop, skip event
+                pass
 
     def record_failure(self, session_id: str, country: Optional[str] = None, error: Optional[str] = None) -> None:
         """Record failed request"""
@@ -292,7 +320,6 @@ class ProxyManager:
         # Publish event (async-safe)
         if self._event_bus:
             from .sense import Event
-            import asyncio
             event = Event(
                 event_type="proxy.failure",
                 source="proxy_manager",
@@ -307,7 +334,7 @@ class ProxyManager:
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._event_bus.publish(event))
             except RuntimeError:
-                pass  # No running loop, skip event
+                pass
 
     async def health_check(self, proxy_config: Optional[ProxyConfig] = None) -> bool:
         """
@@ -373,11 +400,7 @@ class ProxyManager:
         tasks = []
 
         for country in self.COUNTRIES:
-            proxy_config = ProxyConfig(
-                username=self.username,
-                password=self.password,
-                host=self.host,
-                port=self.port,
+            proxy_config = self._backend.create_proxy(
                 country=country,
                 proxy_type=self.proxy_type,
             )
@@ -401,6 +424,7 @@ class ProxyManager:
     def get_health_summary(self) -> dict:
         """Get summary of proxy health status"""
         summary = {
+            "provider": self.provider_name,
             "total_proxies": len(self.COUNTRIES),
             "healthy": 0,
             "unhealthy": 0,

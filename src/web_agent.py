@@ -6,7 +6,8 @@ from typing import Optional, Any, TYPE_CHECKING
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
-from .proxy_manager import ProxyManager, ProxyType
+from .proxy_manager import ProxyManager
+from .proxy_provider import ProxyType
 from .ua_manager import UserAgentManager
 from .browser_worker import BrowserWorker, WorkerResult
 from .parallel_controller import ParallelController, TaskResult
@@ -18,10 +19,21 @@ if TYPE_CHECKING:
 class AgentConfig(BaseModel):
     """Configuration for WebAgent with validation"""
 
+    # Proxy provider: brightdata, dataimpulse, generic
+    proxy_provider: str = "brightdata"
+
+    # Shared proxy credentials
+    proxy_username: str = ""
+    proxy_password: str = ""
+    proxy_host: str = ""
+    proxy_port: int = Field(default=0, ge=0, le=65535)
+
+    # Legacy BrightData fields (auto-mapped)
     brightdata_username: str = ""
     brightdata_password: str = ""
     brightdata_host: str = "brd.superproxy.io"
     brightdata_port: int = Field(default=22225, ge=1, le=65535)
+
     proxy_type: str = "residential"
     parallel_sessions: int = Field(default=5, ge=1, le=50)
     headless: bool = True
@@ -35,14 +47,31 @@ class AgentConfig(BaseModel):
             raise ValueError(f"proxy_type must be one of: {valid_types}")
         return v.lower()
 
-    @field_validator("brightdata_host")
+    @field_validator("proxy_provider")
     @classmethod
-    def validate_host(cls, v: str) -> str:
-        if v and not v.replace(".", "").replace("-", "").replace("_", "").isalnum():
-            raise ValueError("Invalid host format")
-        return v
+    def validate_proxy_provider(cls, v: str) -> str:
+        valid = {"brightdata", "dataimpulse", "geonode", "generic"}
+        if v.lower() not in valid:
+            raise ValueError(f"proxy_provider must be one of: {valid}")
+        return v.lower()
 
     model_config = ConfigDict(extra="forbid")
+
+    @property
+    def resolved_username(self) -> str:
+        return self.proxy_username or self.brightdata_username
+
+    @property
+    def resolved_password(self) -> str:
+        return self.proxy_password or self.brightdata_password
+
+    @property
+    def resolved_host(self) -> str:
+        return self.proxy_host or self.brightdata_host
+
+    @property
+    def resolved_port(self) -> int:
+        return self.proxy_port or self.brightdata_port
 
 
 class WebAgent:
@@ -76,8 +105,9 @@ class WebAgent:
 
         # Initialize proxy manager if credentials provided
         self.proxy_manager = None
-        if self.config.brightdata_username and self.config.brightdata_password:
-            # Convert string to ProxyType enum
+        username = self.config.resolved_username
+        password = self.config.resolved_password
+        if username and password:
             proxy_type_map = {
                 "residential": ProxyType.RESIDENTIAL,
                 "datacenter": ProxyType.DATACENTER,
@@ -89,18 +119,18 @@ class WebAgent:
             )
 
             self.proxy_manager = ProxyManager(
-                username=self.config.brightdata_username,
-                password=self.config.brightdata_password,
-                host=self.config.brightdata_host,
-                port=self.config.brightdata_port,
+                username=username,
+                password=password,
+                host=self.config.resolved_host,
+                port=self.config.resolved_port,
                 proxy_type=proxy_type,
+                provider=self.config.proxy_provider,
                 event_bus=event_bus,
                 metrics_collector=metrics_collector,
             )
-            proxy_label = f"{proxy_type.value}" if proxy_type != ProxyType.RESIDENTIAL else f"{proxy_type.value} (default)"
-            logger.info(f"Proxy enabled: type={proxy_label}")
+            logger.info(f"Proxy enabled: provider={self.config.proxy_provider}, type={proxy_type.value}")
         else:
-            logger.info("Proxy disabled: BRIGHTDATA credentials not set (direct connection)")
+            logger.info("Proxy disabled: credentials not set (direct connection)")
 
         self.ua_manager = UserAgentManager()
         self.controller = ParallelController(

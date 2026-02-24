@@ -1,9 +1,14 @@
 """
-Tests for ProxyManager
+Tests for ProxyManager and ProxyProvider
 """
 import pytest
 import time
-from src.proxy_manager import ProxyManager, ProxyConfig, ProxyStats, ProxyType
+from src.proxy_manager import ProxyManager, ProxyStats
+from src.proxy_provider import (
+    ProxyConfig, ProxyType, ProxyProvider,
+    BrightDataBackend, DataImpulseBackend, GeoNodeBackend, GenericProxyBackend,
+    create_proxy_backend,
+)
 
 
 class TestProxyConfig:
@@ -11,42 +16,77 @@ class TestProxyConfig:
 
     def test_basic_url(self):
         config = ProxyConfig(
-            username="user",
-            password="pass",
-            host="proxy.example.com",
-            port=8080,
+            provider=ProxyProvider.BRIGHTDATA,
+            url="http://user:pass@proxy.example.com:8080",
         )
-        url = config.get_url()
-        assert url == "http://user:pass@proxy.example.com:8080"
+        assert config.get_url() == "http://user:pass@proxy.example.com:8080"
 
     def test_url_with_country(self):
-        config = ProxyConfig(
-            username="user",
-            password="pass",
-            country="us",
-        )
-        url = config.get_url()
-        assert "-country-us" in url
+        backend = BrightDataBackend(username="user", password="pass")
+        config = backend.create_proxy(country="us")
+        assert "-country-us" in config.get_url()
 
     def test_url_with_session(self):
-        config = ProxyConfig(
-            username="user",
-            password="pass",
-            session_id="sess123",
-        )
-        url = config.get_url()
-        assert "-session-sess123" in url
+        backend = BrightDataBackend(username="user", password="pass")
+        config = backend.create_proxy(session_id="sess123")
+        assert "-session-sess123" in config.get_url()
 
     def test_url_with_country_and_session(self):
-        config = ProxyConfig(
-            username="user",
-            password="pass",
-            country="jp",
-            session_id="sess456",
-        )
+        backend = BrightDataBackend(username="user", password="pass")
+        config = backend.create_proxy(country="jp", session_id="sess456")
         url = config.get_url()
         assert "-country-jp" in url
         assert "-session-sess456" in url
+
+
+class TestProxyBackends:
+    """Tests for proxy provider backends"""
+
+    def test_brightdata_backend(self):
+        backend = BrightDataBackend(username="user", password="pass")
+        assert backend.provider_name == ProxyProvider.BRIGHTDATA
+        config = backend.create_proxy(country="us", proxy_type=ProxyType.RESIDENTIAL)
+        assert "brd.superproxy.io" in config.get_url()
+
+    def test_dataimpulse_backend(self):
+        backend = DataImpulseBackend(username="user", password="pass")
+        assert backend.provider_name == ProxyProvider.DATAIMPULSE
+        config = backend.create_proxy(country="jp", proxy_type=ProxyType.RESIDENTIAL)
+        assert "gw.dataimpulse.com:823" in config.get_url()
+
+    def test_dataimpulse_mobile_port(self):
+        backend = DataImpulseBackend(username="user", password="pass")
+        config = backend.create_proxy(proxy_type=ProxyType.MOBILE)
+        assert "gw.dataimpulse.com:824" in config.get_url()
+
+    def test_geonode_backend(self):
+        backend = GeoNodeBackend(username="user", password="pass")
+        assert backend.provider_name == ProxyProvider.GEONODE
+        config = backend.create_proxy(country="de", proxy_type=ProxyType.RESIDENTIAL)
+        assert "premium-residential.geonode.com" in config.get_url()
+
+    def test_geonode_sticky_port(self):
+        backend = GeoNodeBackend(username="user", password="pass")
+        config = backend.create_proxy(session_id="sticky1")
+        assert ":9002" in config.get_url()
+
+    def test_generic_backend(self):
+        backend = GenericProxyBackend(urls=["http://proxy1:8080", "http://proxy2:8080"])
+        assert backend.provider_name == ProxyProvider.GENERIC
+        config1 = backend.create_proxy()
+        config2 = backend.create_proxy()
+        assert config1.get_url() == "http://proxy1:8080"
+        assert config2.get_url() == "http://proxy2:8080"
+
+    def test_factory(self):
+        bd = create_proxy_backend("brightdata", username="u", password="p")
+        assert isinstance(bd, BrightDataBackend)
+        di = create_proxy_backend("dataimpulse", username="u", password="p")
+        assert isinstance(di, DataImpulseBackend)
+        gn = create_proxy_backend("geonode", username="u", password="p")
+        assert isinstance(gn, GeoNodeBackend)
+        gen = create_proxy_backend("generic", proxy_urls=["http://x:1"])
+        assert isinstance(gen, GenericProxyBackend)
 
 
 class TestProxyStats:

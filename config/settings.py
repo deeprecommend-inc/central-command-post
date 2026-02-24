@@ -4,15 +4,30 @@ from typing import Optional, Literal
 
 
 class Settings(BaseSettings):
-    # BrightData Proxy
+    # Proxy Provider: brightdata, dataimpulse, generic
+    proxy_provider: str = Field(default="brightdata", env="PROXY_PROVIDER")
+
+    # Proxy credentials (provider-agnostic)
+    proxy_username: str = Field(default="", env="PROXY_USERNAME")
+    proxy_password: str = Field(default="", env="PROXY_PASSWORD")
+    proxy_host: str = Field(default="", env="PROXY_HOST")
+    proxy_port: int = Field(default=0, env="PROXY_PORT")
+
+    # Legacy BrightData fields (fallback if PROXY_* not set)
     brightdata_username: str = Field(default="", env="BRIGHTDATA_USERNAME")
     brightdata_password: str = Field(default="", env="BRIGHTDATA_PASSWORD")
     brightdata_host: str = Field(default="brd.superproxy.io", env="BRIGHTDATA_HOST")
     brightdata_port: int = Field(default=22225, env="BRIGHTDATA_PORT")
-    # Proxy type: residential (住宅IP), datacenter, mobile, isp
+
+    # Proxy type: residential, datacenter, mobile, isp
     brightdata_proxy_type: Literal["residential", "datacenter", "mobile", "isp"] = Field(
         default="residential", env="BRIGHTDATA_PROXY_TYPE"
     )
+
+    # Antidetect browser: none, adspower
+    antidetect: str = Field(default="none", env="ANTIDETECT")
+    adspower_api_base: str = Field(default="http://local.adspower.com:50325", env="ADSPOWER_API_BASE")
+    adspower_profile_id: str = Field(default="", env="ADSPOWER_PROFILE_ID")
 
     # Browser
     headless: bool = Field(default=True, env="HEADLESS")
@@ -65,10 +80,28 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
 
     @property
+    def resolved_proxy_username(self) -> str:
+        return self.proxy_username or self.brightdata_username
+
+    @property
+    def resolved_proxy_password(self) -> str:
+        return self.proxy_password or self.brightdata_password
+
+    @property
+    def resolved_proxy_host(self) -> str:
+        return self.proxy_host or self.brightdata_host
+
+    @property
+    def resolved_proxy_port(self) -> int:
+        return self.proxy_port or self.brightdata_port
+
+    @property
     def brightdata_proxy_url(self) -> str:
-        if not self.brightdata_username or not self.brightdata_password:
+        u = self.resolved_proxy_username
+        p = self.resolved_proxy_password
+        if not u or not p:
             return ""
-        return f"http://{self.brightdata_username}:{self.brightdata_password}@{self.brightdata_host}:{self.brightdata_port}"
+        return f"http://{u}:{p}@{self.resolved_proxy_host}:{self.resolved_proxy_port}"
 
 
     def load_from_vault(self) -> dict[str, str]:

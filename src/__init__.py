@@ -5,7 +5,13 @@ CCP - Central Command Platform
 """
 # Command Layer (existing)
 from .web_agent import WebAgent, AgentConfig
-from .proxy_manager import ProxyManager, ProxyType
+from .proxy_manager import ProxyManager
+from .proxy_provider import (
+    ProxyType, ProxyProvider, ProxyConfig, ProxyProviderBackend,
+    BrightDataBackend, DataImpulseBackend, GeoNodeBackend, GenericProxyBackend,
+    create_proxy_backend,
+)
+from .adspower_client import AdsPowerClient, AdsPowerConfig, AdsPowerProfile
 from .ua_manager import UserAgentManager
 from .browser_worker import BrowserWorker, WorkerResult, ErrorType
 from .parallel_controller import ParallelController, TaskResult
@@ -90,6 +96,17 @@ __all__ = [
     "AgentConfig",
     "ProxyManager",
     "ProxyType",
+    "ProxyProvider",
+    "ProxyConfig",
+    "ProxyProviderBackend",
+    "BrightDataBackend",
+    "DataImpulseBackend",
+    "GeoNodeBackend",
+    "GenericProxyBackend",
+    "create_proxy_backend",
+    "AdsPowerClient",
+    "AdsPowerConfig",
+    "AdsPowerProfile",
     "UserAgentManager",
     "BrowserWorker",
     "WorkerResult",
