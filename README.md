@@ -175,6 +175,50 @@ python run.py url --no-proxy https://example.com
 python run.py health
 ```
 
+### Mass-Scale Execution (1M+ IPs / User-Agents)
+
+Residential proxy providers expose millions of unique IPs. Each session automatically gets a random IP + user-agent pair, so running N tasks = N distinct fingerprints.
+
+```bash
+# --- 1. Set provider credentials in .env ---
+# BrightData: 72M+ residential IPs
+PROXY_PROVIDER=brightdata
+BRIGHTDATA_USERNAME=brd-customer-xxx
+BRIGHTDATA_PASSWORD=xxx
+
+# Or GeoNode: unlimited bandwidth, 2M+ IPs
+PROXY_PROVIDER=geonode
+PROXY_USERNAME=xxx
+PROXY_PASSWORD=xxx
+PROXY_HOST=premium-residential.geonode.com
+PROXY_PORT=9001
+
+# --- 2. Single task (1 unique IP + UA per run) ---
+python run.py ai -r "Go to target.com and extract the price"
+
+# --- 3. Parallel tasks (5 unique IP + UA combos at once) ---
+python run.py parallel -r \
+  "Go to target.com/product/1 and get the price" \
+  "Go to target.com/product/2 and get the price" \
+  "Go to target.com/product/3 and get the price" \
+  "Go to target.com/product/4 and get the price" \
+  "Go to target.com/product/5 and get the price"
+
+# --- 4. Scale concurrency ---
+# Set PARALLEL_SESSIONS to control how many browsers run at once.
+# Each gets a unique IP + user-agent automatically.
+PARALLEL_SESSIONS=20 python run.py parallel -r "task1" "task2" ... "task20"
+
+# --- 5. Mobile IP pool (30M+ IPs on BrightData) ---
+python run.py parallel -m "task1" "task2" "task3"
+
+# --- 6. Combine with AdsPower for full fingerprint uniqueness ---
+# Each session = unique IP + UA + canvas/WebGL/fonts/timezone fingerprint
+python run.py parallel --adspower --proxy-provider geonode "task1" "task2" "task3"
+```
+
+To reach 1M+ unique IPs, run tasks in batches. Each execution draws a fresh IP from the provider's pool (BrightData: 72M+ residential, 30M+ mobile; GeoNode: 2M+ residential). User-agents are rotated independently per session via the built-in UA manager.
+
 ### Antidetect Browser (AdsPower)
 
 Use AdsPower's fingerprint browser for unique browser profiles per session. Free tier includes 2 profiles with API access.
@@ -188,6 +232,30 @@ python run.py ai --adspower --proxy-provider geonode "Navigate to site and extra
 ```
 
 Requires AdsPower desktop app running locally (API at `http://local.adspower.com:50325`).
+
+### Session Persistence (Login Once, Stay Logged In)
+
+Chrome sessions are persisted to disk so you can log in once and stay logged in across runs. Cookies, localStorage, and sessionStorage are all preserved.
+
+```bash
+# First run: log in manually or via the agent
+python run.py ai --session youtube "Go to youtube.com and log in" --no-proxy
+
+# Second run: already logged in (same session name = same Chrome profile)
+python run.py ai --session youtube "Go to youtube.com and check if logged in" --no-proxy
+
+# Fresh session (ignore saved data, no persistence)
+python run.py ai --fresh "Go to youtube.com" --no-proxy
+
+# Default session (used when --session is not specified)
+python run.py ai "Go to example.com" --no-proxy
+
+# browse.py also supports sessions
+python browse.py --session mysite "Open https://mysite.com"
+python browse.py --fresh "Open https://example.com"
+```
+
+Session data is stored in `./sessions/<name>/` and is gitignored by default. Set `SESSION_DIR` in `.env` to change the default path.
 
 ### CAPTCHA Solving
 
@@ -312,6 +380,8 @@ print(f"{valid} valid, {invalid} invalid")
 | `--local` | | Use local LLM (no API key needed) |
 | `--llm-base-url <url>` | | Local LLM server URL (default: `http://localhost:11434/v1`) |
 | `--llm-model <name>` | | LLM model name (e.g. `dolphin3`, `hermes3`) |
+| `--session <name>` | | Use named persistent session (default: `default`) |
+| `--fresh` | | Ignore saved session, no persistence |
 | `--residential` | `-r` | Residential IP (default) |
 | `--mobile` | `-m` | Mobile IP |
 | `--datacenter` | `-d` | Datacenter IP |
@@ -386,6 +456,7 @@ docker-compose logs -f ccp-api             # View logs
 | `BRIGHTDATA_USERNAME` | No | BrightData username (legacy fallback) |
 | `BRIGHTDATA_PASSWORD` | No | BrightData password (legacy fallback) |
 | `BRIGHTDATA_PROXY_TYPE` | No | `residential` / `datacenter` / `mobile` / `isp` |
+| `SESSION_DIR` | No | Session persistence directory (default: `./sessions/default`) |
 | `PARALLEL_SESSIONS` | No | Parallel sessions (default: 5) |
 | `HEADLESS` | No | Headless mode (default: true) |
 

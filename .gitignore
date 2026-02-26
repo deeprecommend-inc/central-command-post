@@ -35,5 +35,8 @@ logs/
 playwright-report/
 test-results/
 
+# Browser session data
+sessions/
+
 # Claude
 .claude/settings.local.json

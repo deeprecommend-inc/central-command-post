@@ -16,11 +16,11 @@ load_dotenv()
 
 CHROME_PATH = "/root/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome"
 CDP_PORT = 9222
+DEFAULT_SESSION_DIR = "./sessions"
 
 
-def launch_browser(headless: bool = True) -> tuple[subprocess.Popen, str]:
+def launch_browser(headless: bool = True, session_dir: str = "") -> tuple[subprocess.Popen, str]:
     """Launch Chrome with CDP and return process + websocket URL"""
-    headless_arg = "--headless=new" if headless else ""
     args = [
         CHROME_PATH,
         "--no-sandbox",
@@ -29,6 +29,11 @@ def launch_browser(headless: bool = True) -> tuple[subprocess.Popen, str]:
         f"--remote-debugging-port={CDP_PORT}",
         "--remote-debugging-address=127.0.0.1",
     ]
+    if session_dir:
+        abs_dir = os.path.abspath(session_dir)
+        os.makedirs(abs_dir, exist_ok=True)
+        args.append(f"--user-data-dir={abs_dir}")
+        print(f"Session persistence: {abs_dir}")
     if headless:
         args.insert(1, "--headless=new")
 
@@ -80,13 +85,13 @@ def get_llm(model: str = "gpt-4o", base_url: str = ""):
         return ChatOpenAI(model=model)
 
 
-async def run(task: str, headless: bool = True, model: str = "gpt-4o", base_url: str = ""):
+async def run(task: str, headless: bool = True, model: str = "gpt-4o", base_url: str = "", session_dir: str = ""):
     from browser_use import Agent
     from browser_use.browser.profile import BrowserProfile
 
     # Launch browser with CDP
     print(f"Launching browser (headless={headless})...")
-    proc, ws_url = launch_browser(headless)
+    proc, ws_url = launch_browser(headless, session_dir=session_dir)
     print(f"Browser ready: {ws_url[:50]}...")
 
     try:
@@ -112,12 +117,15 @@ Usage:
   python browse.py --model claude-sonnet-4-20250514 "<task>"
   python browse.py --local "<task>"
   python browse.py --local --model dolphin3 "<task>"
+  python browse.py --session mysite "<task>"
 
 Options:
   --show              Show browser window (not headless)
   --model <model>     LLM model (default: gpt-4o)
   --local             Use local LLM (Ollama/LM Studio/vLLM)
   --base-url <url>    Local LLM base URL (default: http://localhost:11434/v1)
+  --session <name>    Use persistent session (default: "default")
+  --fresh             Ignore saved session (fresh launch)
 
 Cloud Models:
   gpt-4o, gpt-4o-mini, o1, o3-mini
@@ -139,12 +147,16 @@ Examples:
   python browse.py --local "Go to example.com and get the title"
   python browse.py --local --model dolphin3 "Search google for AI"
   python browse.py --base-url http://localhost:1234/v1 --model hermes3 "Navigate to github.com"
+  python browse.py --session mysite "Login to mysite.com"
+  python browse.py --fresh "Go to example.com"
 """)
         sys.exit(0)
 
     headless = True
     model = "gpt-4o"
     base_url = ""
+    session_name = "default"
+    fresh = False
     args = sys.argv[1:]
 
     # Parse options
@@ -163,6 +175,11 @@ Examples:
         elif args[i] == "--base-url" and i + 1 < len(args):
             base_url = args[i + 1]
             i += 1
+        elif args[i] == "--session" and i + 1 < len(args):
+            session_name = args[i + 1]
+            i += 1
+        elif args[i] == "--fresh":
+            fresh = True
         else:
             filtered_args.append(args[i])
         i += 1
@@ -172,7 +189,8 @@ Examples:
         print("Error: task required")
         sys.exit(1)
 
-    asyncio.run(run(task, headless, model, base_url))
+    session_dir = "" if fresh else os.path.join(DEFAULT_SESSION_DIR, session_name)
+    asyncio.run(run(task, headless, model, base_url, session_dir))
 
 
 if __name__ == "__main__":

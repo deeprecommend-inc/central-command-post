@@ -37,6 +37,8 @@ def parse_args(args: list[str]) -> tuple[str, list[str], dict]:
         "llm_model": get_env("LLM_MODEL", ""),
         "proxy_provider": get_env("PROXY_PROVIDER", "brightdata"),
         "antidetect": get_env("ANTIDETECT", "none"),
+        "session_dir": get_env("SESSION_DIR", "./sessions/default"),
+        "fresh": False,
     }
 
     i = 0
@@ -81,6 +83,11 @@ def parse_args(args: list[str]) -> tuple[str, list[str], dict]:
         elif arg == "--llm-model" and i + 1 < len(args):
             i += 1
             options["llm_model"] = args[i]
+        elif arg == "--session" and i + 1 < len(args):
+            i += 1
+            options["session_dir"] = f"./sessions/{args[i]}"
+        elif arg == "--fresh":
+            options["fresh"] = True
         else:
             remaining_args.append(arg)
         i += 1
@@ -190,6 +197,7 @@ async def run_ai_agent(
     llm_model: str = "",
     proxy_provider: str = "brightdata",
     antidetect: str = "none",
+    session_dir: str = "",
 ):
     """Run AI-driven browser-use agent with CAPTCHA support"""
     from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
@@ -224,6 +232,7 @@ async def run_ai_agent(
         headless=get_env("HEADLESS", "true").lower() == "true",
         use_vision=get_env("USE_VISION", "true").lower() == "true",
         captcha_solver=captcha_solver,
+        session_dir=session_dir,
         llm_timeout=int(get_env("LLM_TIMEOUT", "300")),
         step_timeout=int(get_env("STEP_TIMEOUT", "600")),
     )
@@ -254,6 +263,7 @@ async def run_parallel_ai(
     llm_model: str = "",
     proxy_provider: str = "brightdata",
     antidetect: str = "none",
+    session_dir: str = "",
 ):
     """Run multiple AI tasks in parallel with CAPTCHA support"""
     from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
@@ -287,6 +297,7 @@ async def run_parallel_ai(
         headless=get_env("HEADLESS", "true").lower() == "true",
         use_vision=get_env("USE_VISION", "true").lower() == "true",
         captcha_solver=captcha_solver,
+        session_dir=session_dir,
         llm_timeout=int(get_env("LLM_TIMEOUT", "300")),
         step_timeout=int(get_env("STEP_TIMEOUT", "600")),
     )
@@ -385,6 +396,10 @@ LLM Options:
   --llm-base-url <url>    Local LLM server URL (default: http://localhost:11434/v1)
   --llm-model <model>     LLM model name (e.g. dolphin3, hermes3, mythomax)
 
+Session Options:
+  --session <name>        Use named session profile (default: "default")
+  --fresh                 Ignore saved session (fresh launch, no persistence)
+
 CAPTCHA Options:
   --captcha-solver <type> CAPTCHA solver: vision (default), 2captcha, anti-captcha
 
@@ -412,6 +427,11 @@ Examples:
   python run.py ai --local --llm-model hermes3 "Search google for AI news"
   python run.py ai --llm-base-url http://localhost:1234/v1 --llm-model dolphin3 "Navigate to github.com"
   python run.py parallel --local "task 1" "task 2" "task 3"
+
+  # Session persistence (login once, stay logged in)
+  python run.py ai --session youtube "Go to youtube.com and log in" --no-proxy
+  python run.py ai --session youtube "Go to youtube.com" --no-proxy  # already logged in
+  python run.py ai --fresh "Go to youtube.com" --no-proxy            # fresh, no session
 
   # Notifications
   python run.py channels
@@ -442,6 +462,7 @@ Environment Variables:
   ANTIDETECT              Antidetect browser: none (default), adspower
   ADSPOWER_API_BASE       AdsPower Local API URL (default: http://local.adspower.com:50325)
   ADSPOWER_PROFILE_ID     AdsPower profile ID (auto-select if empty)
+  SESSION_DIR             Session persistence directory (default: ./sessions/default)
   PARALLEL_SESSIONS       Max parallel sessions (default: 5)
   HEADLESS                Run headless (default: true)
   LOG_FORMAT              Logging format: json or text (default: text)
@@ -603,6 +624,7 @@ def main():
 
     pp = options["proxy_provider"]
     ad = options["antidetect"]
+    sd = "" if options["fresh"] else options["session_dir"]
 
     if command == "url":
         if len(args) < 1:
@@ -621,7 +643,7 @@ def main():
         asyncio.run(run_ai_agent(
             task, proxy_type, options["captcha_solver"],
             options["llm_provider"], options["llm_base_url"], options["llm_model"],
-            pp, ad,
+            pp, ad, sd,
         ))
 
     elif command == "parallel":
@@ -631,7 +653,7 @@ def main():
         asyncio.run(run_parallel_ai(
             args, proxy_type, options["captcha_solver"],
             options["llm_provider"], options["llm_base_url"], options["llm_model"],
-            pp, ad,
+            pp, ad, sd,
         ))
 
     elif command == "score":

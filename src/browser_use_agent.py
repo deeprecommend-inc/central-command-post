@@ -143,6 +143,7 @@ def launch_browser_cdp(
     proxy_server: Optional[str] = None,
     user_agent: Optional[str] = None,
     extension_dir: Optional[str] = None,
+    user_data_dir: Optional[str] = None,
 ) -> tuple[subprocess.Popen, str, int]:
     """
     Launch Chrome with CDP and return (process, websocket_url, port).
@@ -160,6 +161,11 @@ def launch_browser_cdp(
         f"--remote-debugging-port={port}",
         "--remote-debugging-address=127.0.0.1",
     ]
+
+    if user_data_dir:
+        os.makedirs(user_data_dir, exist_ok=True)
+        args.append(f"--user-data-dir={os.path.abspath(user_data_dir)}")
+        logger.info(f"Session persistence: {os.path.abspath(user_data_dir)}")
 
     if extension_dir:
         # Extensions require non-headless or --headless=new (Chrome 109+)
@@ -234,6 +240,9 @@ class BrowserUseConfig:
     # Browser settings
     headless: bool = True
     use_vision: bool = True  # Auto-disabled for local LLM
+
+    # Session persistence (Chrome profile directory)
+    session_dir: str = ""  # Empty = no persistence, e.g. "./sessions/default"
 
     # Timeout settings (seconds)
     llm_timeout: int = 300  # 5 minutes for local LLM
@@ -680,6 +689,7 @@ class BrowserUseAgent:
                     proxy_server=proxy_server,
                     user_agent=user_agent,
                     extension_dir=extension_dir,
+                    user_data_dir=self.config.session_dir or None,
                 )
 
             # Create browser profile with CDP URL
