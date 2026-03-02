@@ -32,7 +32,7 @@ class TestReloadPlan:
         assert plan.reload_channels
 
     def test_core_changes_require_restart(self):
-        plan = build_reload_plan(["BRIGHTDATA_USERNAME"])
+        plan = build_reload_plan(["SMARTPROXY_USERNAME"])
         assert plan.restart_required
         assert not plan.reload_channels
 
@@ -45,7 +45,7 @@ class TestReloadPlan:
         assert plan.restart_required
 
     def test_mixed_changes(self):
-        plan = build_reload_plan(["SLACK_WEBHOOK_URL", "BRIGHTDATA_HOST"])
+        plan = build_reload_plan(["SLACK_WEBHOOK_URL", "SMARTPROXY_HOST"])
         assert plan.reload_channels
         assert plan.restart_required
 

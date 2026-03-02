@@ -50,6 +50,8 @@ class ParallelController:
         max_workers: int = 5,
         headless: bool = True,
         max_retries: int = 3,
+        area: str = "us",
+        timezone: Optional[str] = None,
         event_bus: Optional["EventBus"] = None,
         metrics_collector: Optional["MetricsCollector"] = None,
     ):
@@ -58,6 +60,8 @@ class ParallelController:
         self.max_workers = max_workers
         self.headless = headless
         self.max_retries = max_retries
+        self.area = area
+        self.timezone = timezone
         self._workers: dict[str, BrowserWorker] = {}
         self._semaphore = asyncio.Semaphore(max_workers)
         self._event_bus = event_bus
@@ -69,7 +73,11 @@ class ParallelController:
         if self.proxy_manager:
             proxy = self.proxy_manager.get_proxy(new_session=True)
 
-        profile = self.ua_manager.get_random_profile(session_id=worker_id)
+        profile = self.ua_manager.get_area_profile(
+            area=self.area,
+            timezone=self.timezone,
+            session_id=worker_id,
+        )
 
         worker = BrowserWorker(
             worker_id=worker_id,

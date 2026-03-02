@@ -18,7 +18,7 @@ RELOAD_RULES: dict[str, str] = {
     "teams": "reload_channels",
     "email": "reload_channels",
     "webhook": "reload_channels",
-    "brightdata": "restart_required",
+    "smartproxy": "restart_required",
     "headless": "restart_required",
     "parallel": "restart_required",
 }

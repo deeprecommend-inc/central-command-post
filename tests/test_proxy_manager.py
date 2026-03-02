@@ -1,13 +1,11 @@
 """
-Tests for ProxyManager and ProxyProvider
+Tests for ProxyManager and SmartProxyISPBackend
 """
 import pytest
 import time
 from src.proxy_manager import ProxyManager, ProxyStats
 from src.proxy_provider import (
-    ProxyConfig, ProxyType, ProxyProvider,
-    BrightDataBackend, DataImpulseBackend, GeoNodeBackend, GenericProxyBackend,
-    create_proxy_backend,
+    ProxyConfig, ProxyProvider, SmartProxyISPBackend,
 )
 
 
@@ -16,77 +14,88 @@ class TestProxyConfig:
 
     def test_basic_url(self):
         config = ProxyConfig(
-            provider=ProxyProvider.BRIGHTDATA,
-            url="http://user:pass@proxy.example.com:8080",
+            provider=ProxyProvider.SMARTPROXY,
+            url="http://user-test:pass@isp.decodo.com:10001",
         )
-        assert config.get_url() == "http://user:pass@proxy.example.com:8080"
+        assert config.get_url() == "http://user-test:pass@isp.decodo.com:10001"
 
     def test_url_with_country(self):
-        backend = BrightDataBackend(username="user", password="pass")
+        backend = SmartProxyISPBackend(username="test", password="pass")
         config = backend.create_proxy(country="us")
         assert "-country-us" in config.get_url()
 
     def test_url_with_session(self):
-        backend = BrightDataBackend(username="user", password="pass")
+        backend = SmartProxyISPBackend(username="test", password="pass")
         config = backend.create_proxy(session_id="sess123")
         assert "-session-sess123" in config.get_url()
 
     def test_url_with_country_and_session(self):
-        backend = BrightDataBackend(username="user", password="pass")
+        backend = SmartProxyISPBackend(username="test", password="pass")
         config = backend.create_proxy(country="jp", session_id="sess456")
         url = config.get_url()
         assert "-country-jp" in url
         assert "-session-sess456" in url
 
+    def test_url_contains_session_duration(self):
+        backend = SmartProxyISPBackend(username="test", password="pass")
+        config = backend.create_proxy(session_duration=60)
+        assert "-sessionduration-60" in config.get_url()
 
-class TestProxyBackends:
-    """Tests for proxy provider backends"""
 
-    def test_brightdata_backend(self):
-        backend = BrightDataBackend(username="user", password="pass")
-        assert backend.provider_name == ProxyProvider.BRIGHTDATA
-        config = backend.create_proxy(country="us", proxy_type=ProxyType.RESIDENTIAL)
-        assert "brd.superproxy.io" in config.get_url()
+class TestSmartProxyISPBackend:
+    """Tests for SmartProxyISPBackend"""
 
-    def test_dataimpulse_backend(self):
-        backend = DataImpulseBackend(username="user", password="pass")
-        assert backend.provider_name == ProxyProvider.DATAIMPULSE
-        config = backend.create_proxy(country="jp", proxy_type=ProxyType.RESIDENTIAL)
-        assert "gw.dataimpulse.com:823" in config.get_url()
+    def test_provider_name(self):
+        backend = SmartProxyISPBackend(username="user", password="pass")
+        assert backend.provider_name == ProxyProvider.SMARTPROXY
 
-    def test_dataimpulse_mobile_port(self):
-        backend = DataImpulseBackend(username="user", password="pass")
-        config = backend.create_proxy(proxy_type=ProxyType.MOBILE)
-        assert "gw.dataimpulse.com:824" in config.get_url()
+    def test_default_host_port(self):
+        backend = SmartProxyISPBackend(username="user", password="pass")
+        assert backend.host == "isp.decodo.com"
+        assert backend.port == 10001
 
-    def test_geonode_backend(self):
-        backend = GeoNodeBackend(username="user", password="pass")
-        assert backend.provider_name == ProxyProvider.GEONODE
-        config = backend.create_proxy(country="de", proxy_type=ProxyType.RESIDENTIAL)
-        assert "premium-residential.geonode.com" in config.get_url()
+    def test_custom_host_port(self):
+        backend = SmartProxyISPBackend(username="user", password="pass", host="custom.proxy.com", port=9999)
+        assert backend.host == "custom.proxy.com"
+        assert backend.port == 9999
 
-    def test_geonode_sticky_port(self):
-        backend = GeoNodeBackend(username="user", password="pass")
-        config = backend.create_proxy(session_id="sticky1")
-        assert ":9002" in config.get_url()
+    def test_create_proxy(self):
+        backend = SmartProxyISPBackend(username="user", password="pass")
+        config = backend.create_proxy(country="us")
+        assert "isp.decodo.com:10001" in config.get_url()
+        assert config.provider == ProxyProvider.SMARTPROXY
 
-    def test_generic_backend(self):
-        backend = GenericProxyBackend(urls=["http://proxy1:8080", "http://proxy2:8080"])
-        assert backend.provider_name == ProxyProvider.GENERIC
-        config1 = backend.create_proxy()
-        config2 = backend.create_proxy()
-        assert config1.get_url() == "http://proxy1:8080"
-        assert config2.get_url() == "http://proxy2:8080"
+    def test_get_server_url(self):
+        backend = SmartProxyISPBackend(username="user", password="pass")
+        assert backend.get_server_url() == "http://isp.decodo.com:10001"
 
-    def test_factory(self):
-        bd = create_proxy_backend("brightdata", username="u", password="p")
-        assert isinstance(bd, BrightDataBackend)
-        di = create_proxy_backend("dataimpulse", username="u", password="p")
-        assert isinstance(di, DataImpulseBackend)
-        gn = create_proxy_backend("geonode", username="u", password="p")
-        assert isinstance(gn, GeoNodeBackend)
-        gen = create_proxy_backend("generic", proxy_urls=["http://x:1"])
-        assert isinstance(gen, GenericProxyBackend)
+    def test_get_auth(self):
+        backend = SmartProxyISPBackend(username="user", password="pass")
+        username, password = backend.get_auth(country="jp", session_id="w1")
+        assert username == "user-user-country-jp-session-w1-sessionduration-30"
+        assert password == "pass"
+
+    def test_get_rotating_url(self):
+        backend = SmartProxyISPBackend(username="user", password="pass")
+        url = backend.get_rotating_url()
+        assert "isp.decodo.com:10000" in url
+
+    def test_username_format_full(self):
+        backend = SmartProxyISPBackend(username="myuser", password="mypass")
+        username, _ = backend.get_auth(country="de", session_id="w5", session_duration=60)
+        assert username == "user-myuser-country-de-session-w5-sessionduration-60"
+
+    def test_username_format_no_country(self):
+        backend = SmartProxyISPBackend(username="myuser", password="mypass")
+        username, _ = backend.get_auth(session_id="w1")
+        assert username == "user-myuser-session-w1-sessionduration-30"
+        assert "-country-" not in username
+
+    def test_username_format_no_session(self):
+        backend = SmartProxyISPBackend(username="myuser", password="mypass")
+        username, _ = backend.get_auth(country="us")
+        assert username == "user-myuser-country-us-sessionduration-30"
+        assert "-session-" not in username
 
 
 class TestProxyStats:
@@ -133,50 +142,47 @@ class TestProxyStats:
 class TestProxyManager:
     """Tests for ProxyManager"""
 
+    def _make_manager(self, area="us"):
+        backend = SmartProxyISPBackend(username="user", password="pass")
+        return ProxyManager(backend=backend, area=area)
+
     def test_initialization(self):
-        manager = ProxyManager(
-            username="user",
-            password="pass",
-            proxy_type=ProxyType.MOBILE,
-        )
-        assert manager.username == "user"
-        assert manager.proxy_type == ProxyType.MOBILE
+        manager = self._make_manager()
+        assert manager.provider_name == "smartproxy"
+        assert manager.area == "us"
+
+    def test_requires_backend(self):
+        with pytest.raises(ValueError, match="SmartProxyISPBackend required"):
+            ProxyManager(backend=None)
 
     def test_get_proxy_creates_session(self):
-        manager = ProxyManager(username="user", password="pass")
+        manager = self._make_manager()
         proxy = manager.get_proxy(new_session=True)
         assert proxy.session_id is not None
-        assert proxy.session_id.startswith("sess")
 
     def test_get_proxy_no_session(self):
-        manager = ProxyManager(username="user", password="pass")
+        manager = self._make_manager()
         proxy = manager.get_proxy(new_session=False)
         assert proxy.session_id is None
 
-    def test_get_proxy_with_country(self):
-        manager = ProxyManager(username="user", password="pass")
+    def test_get_proxy_uses_area(self):
+        manager = self._make_manager(area="jp")
+        proxy = manager.get_proxy()
+        assert proxy.country == "jp"
+
+    def test_get_proxy_country_override(self):
+        manager = self._make_manager(area="us")
         proxy = manager.get_proxy(country="de")
         assert proxy.country == "de"
 
-    def test_get_proxy_auto_country(self):
-        manager = ProxyManager(username="user", password="pass")
-        proxy = manager.get_proxy()
-        assert proxy.country in manager.COUNTRIES
-
-    def test_round_robin_country_selection(self):
-        manager = ProxyManager(username="user", password="pass")
-        # Get countries via round-robin
-        countries = []
-        for _ in range(len(manager.COUNTRIES) * 2):
-            country = manager._get_next_country()
-            countries.append(country)
-
-        # Should cycle through all countries
-        assert countries[:len(manager.COUNTRIES)] == manager.COUNTRIES
-        assert countries[len(manager.COUNTRIES):] == manager.COUNTRIES
+    def test_get_proxy_worker_id(self):
+        manager = self._make_manager()
+        proxy = manager.get_proxy(worker_id=3)
+        assert proxy.session_id is not None
+        assert proxy.session_id.startswith("w3_")
 
     def test_record_success(self):
-        manager = ProxyManager(username="user", password="pass")
+        manager = self._make_manager()
         manager.record_success("sess1", response_time=1.5, country="us")
         stats = manager.get_stats()
         assert "sess1" in stats
@@ -184,20 +190,20 @@ class TestProxyManager:
         assert stats["sess1"].total_response_time == 1.5
 
     def test_record_failure(self):
-        manager = ProxyManager(username="user", password="pass")
+        manager = self._make_manager()
         manager.record_failure("sess1", country="us")
         stats = manager.get_stats()
         assert stats["sess1"].failed_requests == 1
 
     def test_consecutive_failures_marks_unhealthy(self):
-        manager = ProxyManager(username="user", password="pass")
+        manager = self._make_manager()
         for _ in range(manager.MAX_CONSECUTIVE_FAILURES):
             manager.record_failure("sess1")
         stats = manager.get_stats()
         assert stats["sess1"].is_healthy is False
 
     def test_success_resets_consecutive_failures(self):
-        manager = ProxyManager(username="user", password="pass")
+        manager = self._make_manager()
         manager.record_failure("sess1")
         manager.record_failure("sess1")
         manager.record_success("sess1")
@@ -206,29 +212,9 @@ class TestProxyManager:
         assert stats["sess1"].is_healthy is True
 
     def test_get_health_summary(self):
-        manager = ProxyManager(username="user", password="pass")
+        manager = self._make_manager()
         manager.record_success("sess1", country="us")
         summary = manager.get_health_summary()
-        assert "total_proxies" in summary
-        assert "healthy" in summary
-        assert "countries" in summary
-
-    def test_proxy_type_override(self):
-        manager = ProxyManager(
-            username="user",
-            password="pass",
-            proxy_type=ProxyType.RESIDENTIAL,
-        )
-        proxy = manager.get_proxy(proxy_type=ProxyType.MOBILE)
-        assert proxy.proxy_type == ProxyType.MOBILE
-
-    def test_select_best_country_prefers_healthy(self):
-        manager = ProxyManager(username="user", password="pass")
-        # Mark one country as unhealthy
-        for _ in range(manager.MAX_CONSECUTIVE_FAILURES):
-            manager.record_failure("sess_us", country="us")
-
-        # Best country should not be "us" if others are healthy
-        best = manager._select_best_country(ProxyType.RESIDENTIAL)
-        # Since all others have no requests (health_score=1.0), any of them is valid
-        assert best in manager.COUNTRIES
+        assert summary["provider"] == "smartproxy"
+        assert summary["area"] == "us"
+        assert "stats" in summary

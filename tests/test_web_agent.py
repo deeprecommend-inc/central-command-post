@@ -3,7 +3,7 @@ Tests for WebAgent
 """
 import pytest
 from pydantic import ValidationError
-from src.web_agent import WebAgent, AgentConfig, create_agent
+from src.web_agent import WebAgent, AgentConfig
 
 
 class TestAgentConfig:
@@ -11,43 +11,26 @@ class TestAgentConfig:
 
     def test_default_config(self):
         config = AgentConfig()
-        assert config.brightdata_username == ""
-        assert config.proxy_type == "residential"
+        assert config.smartproxy_username == ""
+        assert config.area == "us"
         assert config.parallel_sessions == 5
         assert config.headless is True
         assert config.max_retries == 3
 
     def test_custom_config(self):
         config = AgentConfig(
-            brightdata_username="user",
-            brightdata_password="pass",
-            proxy_type="mobile",
+            smartproxy_username="user",
+            smartproxy_password="pass",
+            area="jp",
             parallel_sessions=3,
         )
-        assert config.brightdata_username == "user"
-        assert config.proxy_type == "mobile"
+        assert config.smartproxy_username == "user"
+        assert config.area == "jp"
         assert config.parallel_sessions == 3
-
-    def test_invalid_proxy_type(self):
-        with pytest.raises(ValidationError):
-            AgentConfig(proxy_type="invalid")
-
-    def test_valid_proxy_types(self):
-        for proxy_type in ["residential", "datacenter", "mobile", "isp"]:
-            config = AgentConfig(proxy_type=proxy_type)
-            assert config.proxy_type == proxy_type
-
-    def test_proxy_type_case_insensitive(self):
-        config = AgentConfig(proxy_type="MOBILE")
-        assert config.proxy_type == "mobile"
-
-    def test_invalid_port_too_low(self):
-        with pytest.raises(ValidationError):
-            AgentConfig(brightdata_port=0)
 
     def test_invalid_port_too_high(self):
         with pytest.raises(ValidationError):
-            AgentConfig(brightdata_port=70000)
+            AgentConfig(smartproxy_port=70000)
 
     def test_invalid_parallel_sessions_zero(self):
         with pytest.raises(ValidationError):
@@ -65,6 +48,10 @@ class TestAgentConfig:
         with pytest.raises(ValidationError):
             AgentConfig(unknown_field="value")
 
+    def test_no_proxy_flag(self):
+        config = AgentConfig(no_proxy=True)
+        assert config.no_proxy is True
+
 
 class TestWebAgent:
     """Tests for WebAgent"""
@@ -77,11 +64,20 @@ class TestWebAgent:
 
     def test_initialization_with_proxy(self):
         config = AgentConfig(
-            brightdata_username="user",
-            brightdata_password="pass",
+            smartproxy_username="user",
+            smartproxy_password="pass",
         )
         agent = WebAgent(config)
         assert agent.proxy_manager is not None
+
+    def test_initialization_no_proxy_flag(self):
+        config = AgentConfig(
+            smartproxy_username="user",
+            smartproxy_password="pass",
+            no_proxy=True,
+        )
+        agent = WebAgent(config)
+        assert agent.proxy_manager is None
 
     def test_is_closed_property(self):
         agent = WebAgent()
@@ -146,10 +142,3 @@ class TestWebAgentAsync:
         agent = WebAgent()
         result = await agent.health_check()
         assert result == {}
-
-    @pytest.mark.asyncio
-    async def test_create_agent_function(self):
-        agent = await create_agent()
-        assert isinstance(agent, WebAgent)
-        assert agent.proxy_manager is None
-        await agent.cleanup()

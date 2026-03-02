@@ -1,10 +1,5 @@
 """
-Proxy Manager - Multi-provider proxy rotation with health checking
-
-Supported providers:
-  - brightdata: BrightData ($4-5/GB residential)
-  - dataimpulse: DataImpulse ($1/GB residential, $2/GB mobile)
-  - generic: Any HTTP/SOCKS5 proxy URL
+Proxy Manager - SmartProxy ISP rotation with health checking
 """
 import asyncio
 import random
@@ -24,17 +19,8 @@ if TYPE_CHECKING:
 
 from .proxy_provider import (
     ProxyProvider,
-    ProxyType,
     ProxyConfig,
-    ProxyProviderBackend,
-    BrightDataBackend,
-    DataImpulseBackend,
-    GeoNodeBackend,
-    GenericProxyBackend,
-    create_proxy_backend,
-    BRIGHTDATA_COUNTRIES,
-    DATAIMPULSE_COUNTRIES,
-    GEONODE_COUNTRIES,
+    SmartProxyISPBackend,
 )
 
 
@@ -83,7 +69,7 @@ class ProxyStats:
 
 
 class ProxyManager:
-    """Manages multi-provider proxy rotation with health checking and smart rotation"""
+    """Manages SmartProxy ISP rotation with health checking"""
 
     HEALTH_CHECK_URL = "https://httpbin.org/ip"
     HEALTH_CHECK_TIMEOUT = 10.0
@@ -93,79 +79,30 @@ class ProxyManager:
 
     def __init__(
         self,
-        backend: Optional[ProxyProviderBackend] = None,
-        # Legacy BrightData-compatible constructor args
-        username: str = "",
-        password: str = "",
-        host: str = "brd.superproxy.io",
-        port: int = 22225,
-        proxy_type: ProxyType = ProxyType.RESIDENTIAL,
-        provider: str = "brightdata",
-        proxy_urls: Optional[list[str]] = None,
+        backend: Optional[SmartProxyISPBackend] = None,
+        area: str = "us",
         event_bus: Optional["EventBus"] = None,
         metrics_collector: Optional["MetricsCollector"] = None,
     ):
-        # If backend is provided, use it directly
-        if backend:
-            self._backend = backend
-        elif username and password:
-            self._backend = create_proxy_backend(
-                provider=provider,
-                username=username,
-                password=password,
-                host=host,
-                port=port,
-                proxy_urls=proxy_urls,
-            )
-        elif proxy_urls:
-            self._backend = GenericProxyBackend(urls=proxy_urls)
-        else:
-            raise ValueError("Either backend, credentials, or proxy_urls required")
+        if not backend:
+            raise ValueError("SmartProxyISPBackend required")
 
-        self.proxy_type = proxy_type
+        self._backend = backend
+        self.area = area
         self._session_counter = 0
-        self._country_index = 0
         self._stats: dict[str, ProxyStats] = {}
         self._event_bus = event_bus
         self._metrics = metrics_collector
 
-        # Backward compat: expose credentials for BrightData/DataImpulse
-        self.username = username
-        self.password = password
-        self.host = host
-        self.port = port
-
-        provider_name = self._backend.provider_name.value
-        self.COUNTRIES = self._resolve_countries()
-        logger.info(f"ProxyManager initialized: provider={provider_name}, type={proxy_type.value}")
-
-    def _resolve_countries(self) -> list[str]:
-        """Get country list based on provider"""
-        if isinstance(self._backend, BrightDataBackend):
-            return BRIGHTDATA_COUNTRIES
-        elif isinstance(self._backend, DataImpulseBackend):
-            return DATAIMPULSE_COUNTRIES
-        elif isinstance(self._backend, GeoNodeBackend):
-            return GEONODE_COUNTRIES
-        return ["us"]  # generic fallback
+        logger.info(f"ProxyManager initialized: provider=smartproxy, area={area}")
 
     @property
-    def backend(self) -> ProxyProviderBackend:
+    def backend(self) -> SmartProxyISPBackend:
         return self._backend
 
     @property
     def provider_name(self) -> str:
         return self._backend.provider_name.value
-
-    def _get_next_country(self) -> str:
-        """Get next country in round-robin fashion for better distribution"""
-        country = self.COUNTRIES[self._country_index]
-        self._country_index = (self._country_index + 1) % len(self.COUNTRIES)
-        return country
-
-    def _get_stats_key(self, country: str, proxy_type: ProxyType) -> str:
-        """Generate stats key for a proxy configuration"""
-        return f"{proxy_type.value}_{country}"
 
     def _get_or_create_stats(self, key: str) -> ProxyStats:
         """Get or create stats for a proxy configuration"""
@@ -175,68 +112,35 @@ class ProxyManager:
 
     def get_proxy(
         self,
+        worker_id: Optional[int] = None,
         country: Optional[str] = None,
         new_session: bool = True,
-        proxy_type: Optional[ProxyType] = None,
     ) -> ProxyConfig:
-        """Get a proxy configuration with smart country selection"""
+        """Get a proxy configuration with unique session ID per worker"""
         session_id = None
         if new_session:
-            self._session_counter += 1
-            session_id = f"sess{self._session_counter}_{random.randint(1000, 9999)}"
+            if worker_id is not None:
+                session_id = f"w{worker_id}_{random.randint(1000, 9999)}"
+            else:
+                self._session_counter += 1
+                session_id = f"sess{self._session_counter}_{random.randint(1000, 9999)}"
 
-        use_type = proxy_type or self.proxy_type
-
-        # Smart country selection based on health
-        if country is None:
-            country = self._select_best_country(use_type)
+        use_country = country or self.area
 
         proxy = self._backend.create_proxy(
-            country=country,
+            country=use_country,
             session_id=session_id,
-            proxy_type=use_type,
         )
 
-        # Update last used time
-        stats_key = self._get_stats_key(country, use_type)
+        stats_key = f"smartproxy_{use_country}"
         stats = self._get_or_create_stats(stats_key)
         stats.last_used = time.time()
 
         logger.debug(
-            f"Created proxy config: provider={self.provider_name}, "
-            f"type={use_type.value}, country={proxy.country}, session={proxy.session_id}"
+            f"Created proxy config: provider=smartproxy, "
+            f"country={proxy.country}, session={proxy.session_id}"
         )
         return proxy
-
-    def _select_best_country(self, proxy_type: ProxyType) -> str:
-        """Select best country based on health scores"""
-        best_country = None
-        best_score = -1.0
-        current_time = time.time()
-
-        for country in self.COUNTRIES:
-            stats_key = self._get_stats_key(country, proxy_type)
-            stats = self._get_or_create_stats(stats_key)
-
-            # Skip unhealthy proxies in cooldown
-            if not stats.is_healthy:
-                if current_time - stats.last_used < self.UNHEALTHY_COOLDOWN:
-                    continue
-                # Reset health after cooldown
-                stats.is_healthy = True
-                stats.consecutive_failures = 0
-
-            score = stats.health_score
-            if score > best_score:
-                best_score = score
-                best_country = country
-
-        # Fallback to round-robin if all unhealthy
-        if best_country is None:
-            best_country = self._get_next_country()
-            logger.warning(f"All proxies unhealthy, falling back to: {best_country}")
-
-        return best_country
 
     def get_rotating_proxy_url(self) -> str:
         """Get a simple rotating proxy URL"""
@@ -254,9 +158,8 @@ class ProxyManager:
         stats.consecutive_failures = 0
         stats.is_healthy = True
 
-        # Also update country-level stats if provided
         if country:
-            country_key = self._get_stats_key(country, self.proxy_type)
+            country_key = f"smartproxy_{country}"
             country_stats = self._get_or_create_stats(country_key)
             country_stats.total_requests += 1
             country_stats.successful_requests += 1
@@ -264,12 +167,10 @@ class ProxyManager:
             country_stats.consecutive_failures = 0
             country_stats.is_healthy = True
 
-        # Record metrics
         if self._metrics:
             self._metrics.record("proxy.request.success", 1.0, {"country": country or "unknown"})
             self._metrics.record("proxy.response_time", response_time, {"country": country or "unknown"})
 
-        # Publish event (async-safe)
         if self._event_bus:
             from .sense import Event
             event = Event(
@@ -301,9 +202,8 @@ class ProxyManager:
             stats.is_healthy = False
             logger.warning(f"Proxy {session_id} marked unhealthy after {stats.consecutive_failures} failures")
 
-        # Also update country-level stats if provided
         if country:
-            country_key = self._get_stats_key(country, self.proxy_type)
+            country_key = f"smartproxy_{country}"
             country_stats = self._get_or_create_stats(country_key)
             country_stats.total_requests += 1
             country_stats.failed_requests += 1
@@ -313,11 +213,9 @@ class ProxyManager:
                 country_stats.is_healthy = False
                 logger.warning(f"Country {country} marked unhealthy")
 
-        # Record metrics
         if self._metrics:
             self._metrics.record("proxy.request.failure", 1.0, {"country": country or "unknown"})
 
-        # Publish event (async-safe)
         if self._event_bus:
             from .sense import Event
             event = Event(
@@ -337,10 +235,7 @@ class ProxyManager:
                 pass
 
     async def health_check(self, proxy_config: Optional[ProxyConfig] = None) -> bool:
-        """
-        Perform health check on a proxy configuration.
-        Returns True if proxy is healthy, False otherwise.
-        """
+        """Perform health check on a proxy configuration"""
         if not HAS_AIOHTTP:
             logger.warning("aiohttp not available, skipping health check")
             return True
@@ -349,7 +244,7 @@ class ProxyManager:
             proxy_config = self.get_proxy(new_session=True)
 
         proxy_url = proxy_config.get_url()
-        stats_key = self._get_stats_key(proxy_config.country or "unknown", proxy_config.proxy_type)
+        stats_key = f"smartproxy_{proxy_config.country or 'unknown'}"
         stats = self._get_or_create_stats(stats_key)
 
         start_time = time.time()
@@ -395,23 +290,10 @@ class ProxyManager:
             return False
 
     async def health_check_all(self) -> dict[str, bool]:
-        """Perform health check on all country proxies"""
+        """Perform health check on area proxy"""
         results = {}
-        tasks = []
-
-        for country in self.COUNTRIES:
-            proxy_config = self._backend.create_proxy(
-                country=country,
-                proxy_type=self.proxy_type,
-            )
-            tasks.append((country, self.health_check(proxy_config)))
-
-        for country, task in tasks:
-            try:
-                results[country] = await task
-            except Exception as e:
-                logger.error(f"Health check failed for {country}: {e}")
-                results[country] = False
+        proxy_config = self._backend.create_proxy(country=self.area)
+        results[self.area] = await self.health_check(proxy_config)
 
         healthy_count = sum(1 for v in results.values() if v)
         logger.info(f"Health check complete: {healthy_count}/{len(results)} healthy")
@@ -423,26 +305,20 @@ class ProxyManager:
 
     def get_health_summary(self) -> dict:
         """Get summary of proxy health status"""
-        summary = {
-            "provider": self.provider_name,
-            "total_proxies": len(self.COUNTRIES),
-            "healthy": 0,
-            "unhealthy": 0,
-            "countries": {},
-        }
+        stats_key = f"smartproxy_{self.area}"
+        stats = self._get_or_create_stats(stats_key)
 
-        for country in self.COUNTRIES:
-            stats_key = self._get_stats_key(country, self.proxy_type)
-            stats = self._get_or_create_stats(stats_key)
-            summary["countries"][country] = {
+        summary = {
+            "provider": "smartproxy",
+            "area": self.area,
+            "healthy": 1 if stats.is_healthy else 0,
+            "unhealthy": 0 if stats.is_healthy else 1,
+            "stats": {
                 "healthy": stats.is_healthy,
                 "success_rate": f"{stats.success_rate:.1%}",
                 "avg_response_time": f"{stats.avg_response_time:.2f}s" if stats.avg_response_time != float('inf') else "N/A",
                 "health_score": f"{stats.health_score:.2f}",
-            }
-            if stats.is_healthy:
-                summary["healthy"] += 1
-            else:
-                summary["unhealthy"] += 1
+            },
+        }
 
         return summary

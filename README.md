@@ -55,45 +55,75 @@ ollama pull hermes3         # Nous Hermes 3 (8B)
 ollama pull mythomax        # MythoMax-L2 (13B)
 
 # Run
-python run.py ai --local --no-proxy "Go to example.com and get the page title"
+python run.py --no-proxy "Go to example.com and get the page title"
 ```
 
 ### Option B: Run with a cloud LLM
 
 ```bash
 # Set your API key in .env
-echo "OPENAI_API_KEY=sk-your-key" >> .env
+echo "LLM_PROVIDER=openai" >> .env
+echo "LLM_API_KEY=sk-your-key" >> .env
 
 # Run
-python run.py ai --no-proxy "Go to example.com and get the page title"
+python run.py --no-proxy "Go to example.com and get the page title"
 ```
 
 ## Usage
 
-### Local LLM
-
-All `ai` and `parallel` commands accept `--local` to use a local LLM server with no API key.
-
 ```bash
-# Default: Ollama + dolphin3
-python run.py ai --local "Fill in the contact form on example.com" --no-proxy
-
-# Specify model
-python run.py ai --local --llm-model hermes3 "Search google for AI news" --no-proxy
-
-# Specify server URL (LM Studio, vLLM, etc.)
-python run.py ai --llm-base-url http://localhost:1234/v1 --llm-model mythomax "Navigate to github.com" --no-proxy
-
-# Parallel tasks
-python run.py parallel --local "task one" "task two" "task three" --no-proxy
-
-# browse.py (lightweight runner)
-python browse.py --local "Go to google.com and search for python"
-python browse.py --local --model dolphin3 "Open https://example.com"
-python browse.py --base-url http://localhost:8000/v1 --model hermes3 "Search for news"
+python run.py [options] "<prompt>"
 ```
 
-You can also set local LLM as the default in `.env` so `--local` is not needed:
+### Options
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--model <name>` | `-m` | LLM model (default: `dolphin3`) |
+| `--parallel <n>` | `-p` | Parallel workers (default: 1) |
+| `--area <code>` | `-a` | Country code for proxy (default: `us`) |
+| `--timezone <tz>` | `-t` | Timezone override (default: auto from area) |
+| `--mode <mode>` | `-M` | Execution mode: `browser-use` (default) or `scrapling` |
+| `--no-proxy` | | Direct connection (no proxy) |
+| `--verbose` | `-v` | Debug logging |
+
+### Examples
+
+```bash
+# No proxy, default local LLM
+python run.py --no-proxy "Go to example.com and get the page title"
+
+# Specify model
+python run.py -m hermes3 --no-proxy "Search google for AI news"
+
+# With SmartProxy ISP (Japan IP)
+python run.py -a jp "Go to https://httpbin.org/ip and get the IP"
+
+# Parallel execution (3 workers, US area)
+python run.py -p 3 -a us "Go to https://httpbin.org/ip and get the IP"
+```
+
+### Scrapling Stealth Mode
+
+Scrapling provides anti-bot stealth (TLS fingerprint spoofing, CDP runtime patches, Cloudflare bypass) for single-page fetching.
+
+```bash
+# Install scrapling
+pip install "scrapling[fetchers]" && scrapling install
+
+# Stealth fetch
+python run.py -M scrapling --no-proxy "https://example.com"
+
+# With proxy (Japan IP)
+python run.py -M scrapling -a jp "https://httpbin.org/ip"
+
+# Cloudflare bypass
+SOLVE_CLOUDFLARE=true python run.py -M scrapling "https://target.com"
+```
+
+### Local LLM
+
+Set local LLM as the default in `.env`:
 
 ```bash
 LLM_PROVIDER=local
@@ -126,136 +156,71 @@ Tested local models:
 ### Cloud LLM
 
 ```bash
-# OpenAI (default)
-python run.py ai "Go to example.com, fill in the form, and submit" --no-proxy
+# OpenAI
+LLM_PROVIDER=openai LLM_API_KEY=sk-xxx python run.py --no-proxy "Go to example.com"
 
 # Anthropic Claude
-python browse.py --model claude-sonnet-4-20250514 "Search for AI news"
-
-# Specific OpenAI model
-python browse.py --model gpt-4o-mini "Open https://example.com"
-python browse.py --show "Open https://example.com"  # visible browser
+LLM_PROVIDER=anthropic LLM_API_KEY=sk-ant-xxx python run.py -m claude-sonnet-4-20250514 --no-proxy "Search for AI news"
 ```
 
 Supported cloud models: gpt-4o, gpt-4o-mini, o1, o3-mini, claude-sonnet-4-20250514, claude-opus-4-20250514
 
-### Proxy Rotation
+### Proxy (SmartProxy ISP)
 
-Rotate through residential, mobile, datacenter, or ISP IPs via multiple proxy providers. Optional -- runs with direct connection if not configured.
-
-Supported providers:
-
-| Provider | Pricing | Best For |
-|----------|---------|----------|
-| GeoNode | $49/mo unlimited | High-volume (recommended) |
-| DataImpulse | $1/GB residential, $2/GB mobile | Pay-per-use |
-| BrightData | $4-5/GB residential | Premium quality |
-| Generic | Any HTTP/SOCKS5 proxy URL | Custom proxies |
+Each parallel worker automatically gets a unique sticky IP + user agent via SmartProxy ISP (Decodo). Optional -- runs with direct connection if not configured.
 
 ```bash
-# Residential IP (default provider: brightdata)
-python run.py url -r https://example.com
+# Set credentials in .env
+SMARTPROXY_USERNAME=your-username
+SMARTPROXY_PASSWORD=your-password
+SMARTPROXY_AREA=us
 
-# Use GeoNode (unlimited bandwidth)
-python run.py url --proxy-provider geonode https://example.com
+# Single task with proxy
+python run.py "Go to https://httpbin.org/ip and get the IP"
 
-# Use DataImpulse (cheapest per-GB)
-python run.py url --proxy-provider dataimpulse https://example.com
+# Japan IP
+python run.py -a jp "Go to https://httpbin.org/ip and get the IP"
 
-# Mobile IP
-python run.py url -m https://mobile-only-site.com
-
-# Multiple URLs in parallel
-python run.py url https://site-a.com https://site-b.com https://site-c.com
+# 5 parallel workers, each with unique IP
+python run.py -p 5 -a us "Go to https://httpbin.org/ip and get the IP"
 
 # No proxy
-python run.py url --no-proxy https://example.com
-
-# Health check
-python run.py health
+python run.py --no-proxy "Go to example.com"
 ```
 
-### Mass-Scale Execution (1M+ IPs / User-Agents)
+Supported area codes (60+ countries):
 
-Residential proxy providers expose millions of unique IPs. Each session automatically gets a random IP + user-agent pair, so running N tasks = N distinct fingerprints.
+| Region | Codes |
+|--------|-------|
+| North America | `us`, `ca`, `mx` |
+| South America | `br`, `ar`, `cl`, `co`, `pe` |
+| Europe - Western | `gb`, `de`, `fr`, `es`, `it`, `pt`, `nl`, `be`, `ch`, `at`, `ie` |
+| Europe - Northern | `se`, `no`, `dk`, `fi` |
+| Europe - Eastern | `pl`, `cz`, `ro`, `hu`, `ua`, `bg`, `hr`, `sk`, `rs`, `gr` |
+| Europe - Other | `ru`, `tr` |
+| Middle East | `il`, `ae`, `sa`, `qa` |
+| Africa | `za`, `ng`, `eg`, `ke`, `ma`, `gh` |
+| East Asia | `jp`, `kr`, `cn`, `tw`, `hk`, `mn` |
+| Southeast Asia | `sg`, `th`, `vn`, `id`, `my`, `ph` |
+| South Asia | `in`, `pk`, `bd`, `lk` |
+| Oceania | `au`, `nz` |
+
+Each area automatically sets the correct locale and timezone for the browser profile.
+
+### Browser Fingerprints (GoLogin)
+
+For realistic browser fingerprints (user agent, viewport, platform), configure GoLogin API:
+
+1. Create a GoLogin account at https://gologin.com
+2. Go to Settings -> API Documentation -> Generate New Token
+3. Set the token in `.env`:
 
 ```bash
-# --- 1. Set provider credentials in .env ---
-# BrightData: 72M+ residential IPs
-PROXY_PROVIDER=brightdata
-BRIGHTDATA_USERNAME=brd-customer-xxx
-BRIGHTDATA_PASSWORD=xxx
-
-# Or GeoNode: unlimited bandwidth, 2M+ IPs
-PROXY_PROVIDER=geonode
-PROXY_USERNAME=xxx
-PROXY_PASSWORD=xxx
-PROXY_HOST=premium-residential.geonode.com
-PROXY_PORT=9001
-
-# --- 2. Single task (1 unique IP + UA per run) ---
-python run.py ai -r "Go to target.com and extract the price"
-
-# --- 3. Parallel tasks (5 unique IP + UA combos at once) ---
-python run.py parallel -r \
-  "Go to target.com/product/1 and get the price" \
-  "Go to target.com/product/2 and get the price" \
-  "Go to target.com/product/3 and get the price" \
-  "Go to target.com/product/4 and get the price" \
-  "Go to target.com/product/5 and get the price"
-
-# --- 4. Scale concurrency ---
-# Set PARALLEL_SESSIONS to control how many browsers run at once.
-# Each gets a unique IP + user-agent automatically.
-PARALLEL_SESSIONS=20 python run.py parallel -r "task1" "task2" ... "task20"
-
-# --- 5. Mobile IP pool (30M+ IPs on BrightData) ---
-python run.py parallel -m "task1" "task2" "task3"
-
-# --- 6. Combine with AdsPower for full fingerprint uniqueness ---
-# Each session = unique IP + UA + canvas/WebGL/fonts/timezone fingerprint
-python run.py parallel --adspower --proxy-provider geonode "task1" "task2" "task3"
+GOLOGIN_API_TOKEN=your-token-here
 ```
 
-To reach 1M+ unique IPs, run tasks in batches. Each execution draws a fresh IP from the provider's pool (BrightData: 72M+ residential, 30M+ mobile; GeoNode: 2M+ residential). User-agents are rotated independently per session via the built-in UA manager.
-
-### Antidetect Browser (AdsPower)
-
-Use AdsPower's fingerprint browser for unique browser profiles per session. Free tier includes 2 profiles with API access.
-
-```bash
-# Run AI agent with AdsPower fingerprint browser
-python run.py ai --adspower "Go to example.com and get the title" --no-proxy
-
-# Combine with proxy provider
-python run.py ai --adspower --proxy-provider geonode "Navigate to site and extract data"
-```
-
-Requires AdsPower desktop app running locally (API at `http://local.adspower.com:50325`).
-
-### Session Persistence (Login Once, Stay Logged In)
-
-Chrome sessions are persisted to disk so you can log in once and stay logged in across runs. Cookies, localStorage, and sessionStorage are all preserved.
-
-```bash
-# First run: log in manually or via the agent
-python run.py ai --session youtube "Go to youtube.com and log in" --no-proxy
-
-# Second run: already logged in (same session name = same Chrome profile)
-python run.py ai --session youtube "Go to youtube.com and check if logged in" --no-proxy
-
-# Fresh session (ignore saved data, no persistence)
-python run.py ai --fresh "Go to youtube.com" --no-proxy
-
-# Default session (used when --session is not specified)
-python run.py ai "Go to example.com" --no-proxy
-
-# browse.py also supports sessions
-python browse.py --session mysite "Open https://mysite.com"
-python browse.py --fresh "Open https://example.com"
-```
-
-Session data is stored in `./sessions/<name>/` and is gitignored by default. Set `SESSION_DIR` in `.env` to change the default path.
+When configured, each browser session gets a realistic fingerprint from the GoLogin API.
+When not configured (or if the API is unavailable), falls back to random user agent generation.
 
 ### CAPTCHA Solving
 
@@ -263,28 +228,30 @@ AI agent detects and solves CAPTCHAs using Vision AI, with fallback to token-bas
 
 ```bash
 # Vision solver (default, uses the configured LLM)
-python run.py ai --captcha-solver vision "Log in to https://protected-site.com"
-
-# 2captcha fallback
-python run.py ai --captcha-solver 2captcha "Submit the registration form"
-
-# Local LLM + CAPTCHA (if model supports vision)
-python run.py ai --local --captcha-solver vision "Solve the CAPTCHA on example.com" --no-proxy
+python run.py --no-proxy "Log in to https://protected-site.com"
 ```
 
 ### Notifications
 
-Dispatch alerts to Slack, Teams, Email, or webhooks.
+Dispatch alerts to Slack, Teams, Email, or webhooks (via API server).
+
+### Lightweight Browser Runner
 
 ```bash
-python run.py channels
-python run.py notify --channel slack --to "#ops" "CPU usage exceeded 90%"
-python run.py notify --channel webhook --to "https://your-endpoint.com/alert" "Disk full on node-3"
+python browse.py "Go to google.com and search for python"
+python browse.py --model dolphin3 "Open https://example.com"
+```
+
+### Session Persistence (Login Once, Stay Logged In)
+
+Chrome sessions are persisted to disk so you can log in once and stay logged in across runs.
+
+```bash
+# Set SESSION_DIR in .env
+SESSION_DIR=./sessions/default
 ```
 
 ### Workflow with Human-in-the-Loop
-
-Submit a task via API. When AI confidence is below the threshold, it pauses for human approval.
 
 ```bash
 python server.py
@@ -292,34 +259,9 @@ python server.py
 curl -X POST http://localhost:8000/workflow \
   -H "Content-Type: application/json" \
   -d '{"target": "https://example.com", "task_type": "navigate", "enable_approval": true, "confidence_threshold": 0.7}'
-
-curl http://localhost:8000/approvals
-
-curl -X POST http://localhost:8000/approvals/{request_id}/approve \
-  -H "Content-Type: application/json" \
-  -d '{"approved_by": "admin@example.com", "reason": "Verified safe"}'
-```
-
-### Real-time Event Stream
-
-```bash
-python server.py
-```
-
-```python
-import asyncio, websockets
-
-async def listen():
-    async with websockets.connect("ws://localhost:8000/ws/events") as ws:
-        while True:
-            print(await ws.recv())
-
-asyncio.run(listen())
 ```
 
 ### Replay and Policy Comparison
-
-Replay recorded experiences against different policies to find the best strategy.
 
 ```bash
 python simulate.py stats experiences.json
@@ -332,66 +274,8 @@ python simulate.py compare experiences.json --episodes 10
 Store secrets encrypted with post-quantum cryptography.
 
 ```bash
-python run.py vault init
-python run.py vault set OPENAI_API_KEY sk-your-key-here
-python run.py vault get OPENAI_API_KEY
-python run.py vault list
-python run.py vault rotate
+python -c "from src.security.vault import SecureVault; v = SecureVault(); v.init(); v.set('KEY', 'value'); print(v.get('KEY'))"
 ```
-
-### Audit Trail
-
-Every LLM call and decision is logged with a cryptographic signature.
-
-```python
-from src.security import PQCEngine, AuditLogger
-
-engine = PQCEngine()
-signing_kp = engine.generate_signing_keypair()
-audit = AuditLogger(pqc_engine=engine, signing_keypair=signing_kp, log_file="audit.jsonl")
-
-audit.log_event("deployment", input_hash="abc", output_hash="def")
-
-valid, invalid = audit.verify_all()
-print(f"{valid} valid, {invalid} invalid")
-```
-
-## CLI Reference
-
-| Command | Description |
-|---------|-------------|
-| `python run.py url <urls...>` | Navigate to one or more URLs |
-| `python run.py ai "<instruction>"` | Run AI browser agent |
-| `python run.py parallel "<t1>" "<t2>"` | Run multiple AI tasks in parallel |
-| `python run.py demo` | Run demo |
-| `python run.py health` | Proxy health check |
-| `python run.py channels` | List notification channels |
-| `python run.py notify` | Send notification |
-| `python run.py vault <cmd>` | Manage encrypted vault |
-| `python browse.py "<instruction>"` | Run browser-use directly |
-| `python simulate.py stats <file>` | Experience statistics |
-| `python simulate.py replay <file>` | Replay with policy |
-| `python simulate.py compare <file>` | Compare policies |
-
-### CLI Options
-
-| Option | Short | Description |
-|--------|-------|-------------|
-| `--local` | | Use local LLM (no API key needed) |
-| `--llm-base-url <url>` | | Local LLM server URL (default: `http://localhost:11434/v1`) |
-| `--llm-model <name>` | | LLM model name (e.g. `dolphin3`, `hermes3`) |
-| `--session <name>` | | Use named persistent session (default: `default`) |
-| `--fresh` | | Ignore saved session, no persistence |
-| `--residential` | `-r` | Residential IP (default) |
-| `--mobile` | `-m` | Mobile IP |
-| `--datacenter` | `-d` | Datacenter IP |
-| `--isp` | `-i` | ISP IP |
-| `--no-proxy` | | Direct connection (no proxy) |
-| `--proxy-provider <name>` | | `brightdata`, `dataimpulse`, `geonode`, `generic` |
-| `--adspower` | | Use AdsPower fingerprint browser |
-| `--captcha-solver <type>` | | `vision` (default), `2captcha`, `anti-captcha` |
-| `--json` | | JSON log output |
-| `-v` | | Verbose logging (DEBUG) |
 
 ## API Server
 
@@ -437,36 +321,31 @@ docker-compose logs -f ccp-api             # View logs
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LLM_PROVIDER` | No | `openai`, `anthropic`, or `local` (default: `openai`) |
+| `LLM_PROVIDER` | No | `openai`, `anthropic`, or `local` (default: `local`) |
 | `LLM_BASE_URL` | For local | Local LLM server URL (e.g. `http://localhost:11434/v1`) |
-| `LLM_MODEL` | No | Model name (default: `gpt-4o`) |
+| `LLM_MODEL` | No | Model name (default: `dolphin3`) |
 | `LLM_API_KEY` | For cloud | API key (not needed for local) |
 | `OPENAI_API_KEY` | No | Legacy fallback for `LLM_API_KEY` |
 | `ANTHROPIC_API_KEY` | No | For Claude models |
 
-### Proxy
+### Browser Fingerprint (GoLogin)
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `PROXY_PROVIDER` | No | `brightdata`, `dataimpulse`, `geonode`, `generic` (default: `brightdata`) |
-| `PROXY_USERNAME` | No | Proxy username (provider-agnostic) |
-| `PROXY_PASSWORD` | No | Proxy password (provider-agnostic) |
-| `PROXY_HOST` | No | Proxy host (provider-agnostic) |
-| `PROXY_PORT` | No | Proxy port (provider-agnostic) |
-| `BRIGHTDATA_USERNAME` | No | BrightData username (legacy fallback) |
-| `BRIGHTDATA_PASSWORD` | No | BrightData password (legacy fallback) |
-| `BRIGHTDATA_PROXY_TYPE` | No | `residential` / `datacenter` / `mobile` / `isp` |
-| `SESSION_DIR` | No | Session persistence directory (default: `./sessions/default`) |
-| `PARALLEL_SESSIONS` | No | Parallel sessions (default: 5) |
+| `GOLOGIN_API_TOKEN` | No | GoLogin API token for realistic browser fingerprints (fallback: random UA) |
+
+### Proxy (SmartProxy ISP)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SMARTPROXY_USERNAME` | No | SmartProxy ISP username (direct connection if empty) |
+| `SMARTPROXY_PASSWORD` | No | SmartProxy ISP password |
+| `SMARTPROXY_HOST` | No | SmartProxy host (default: `isp.decodo.com`) |
+| `SMARTPROXY_PORT` | No | SmartProxy port (default: `10001`) |
+| `SMARTPROXY_AREA` | No | Default country code (default: `us`) |
+| `SMARTPROXY_TIMEZONE` | No | Timezone override (default: auto from area) |
 | `HEADLESS` | No | Headless mode (default: true) |
-
-### Antidetect Browser
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTIDETECT` | No | `none` (default) or `adspower` |
-| `ADSPOWER_API_BASE` | No | AdsPower Local API URL (default: `http://local.adspower.com:50325`) |
-| `ADSPOWER_PROFILE_ID` | No | Profile ID (auto-select if empty) |
+| `SOLVE_CLOUDFLARE` | No | Enable Cloudflare bypass in scrapling mode (default: false) |
 
 ### CAPTCHA
 

@@ -24,10 +24,7 @@ class TaskStatus(str, Enum):
 
 class ProxyType(str, Enum):
     """Proxy type options"""
-    RESIDENTIAL = "residential"
-    MOBILE = "mobile"
-    DATACENTER = "datacenter"
-    ISP = "isp"
+    SMARTPROXY = "smartproxy"
     NONE = "none"
 
 

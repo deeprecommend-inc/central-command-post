@@ -4,10 +4,10 @@ Web Agent - Main interface for web automation with proxy and UA rotation
 import asyncio
 from typing import Optional, Any, TYPE_CHECKING
 from loguru import logger
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict
 
 from .proxy_manager import ProxyManager
-from .proxy_provider import ProxyType
+from .proxy_provider import SmartProxyISPBackend
 from .ua_manager import UserAgentManager
 from .browser_worker import BrowserWorker, WorkerResult
 from .parallel_controller import ParallelController, TaskResult
@@ -19,59 +19,24 @@ if TYPE_CHECKING:
 class AgentConfig(BaseModel):
     """Configuration for WebAgent with validation"""
 
-    # Proxy provider: brightdata, dataimpulse, generic
-    proxy_provider: str = "brightdata"
+    # SmartProxy ISP credentials
+    smartproxy_username: str = ""
+    smartproxy_password: str = ""
+    smartproxy_host: str = "isp.decodo.com"
+    smartproxy_port: int = Field(default=10001, ge=1, le=65535)
 
-    # Shared proxy credentials
-    proxy_username: str = ""
-    proxy_password: str = ""
-    proxy_host: str = ""
-    proxy_port: int = Field(default=0, ge=0, le=65535)
+    # Area/timezone
+    area: str = "us"
+    no_proxy: bool = False
 
-    # Legacy BrightData fields (auto-mapped)
-    brightdata_username: str = ""
-    brightdata_password: str = ""
-    brightdata_host: str = "brd.superproxy.io"
-    brightdata_port: int = Field(default=22225, ge=1, le=65535)
+    # GoLogin fingerprint API token
+    gologin_api_token: str = ""
 
-    proxy_type: str = "residential"
     parallel_sessions: int = Field(default=5, ge=1, le=50)
     headless: bool = True
     max_retries: int = Field(default=3, ge=0, le=10)
 
-    @field_validator("proxy_type")
-    @classmethod
-    def validate_proxy_type(cls, v: str) -> str:
-        valid_types = {"residential", "datacenter", "mobile", "isp"}
-        if v.lower() not in valid_types:
-            raise ValueError(f"proxy_type must be one of: {valid_types}")
-        return v.lower()
-
-    @field_validator("proxy_provider")
-    @classmethod
-    def validate_proxy_provider(cls, v: str) -> str:
-        valid = {"brightdata", "dataimpulse", "geonode", "generic"}
-        if v.lower() not in valid:
-            raise ValueError(f"proxy_provider must be one of: {valid}")
-        return v.lower()
-
     model_config = ConfigDict(extra="forbid")
-
-    @property
-    def resolved_username(self) -> str:
-        return self.proxy_username or self.brightdata_username
-
-    @property
-    def resolved_password(self) -> str:
-        return self.proxy_password or self.brightdata_password
-
-    @property
-    def resolved_host(self) -> str:
-        return self.proxy_host or self.brightdata_host
-
-    @property
-    def resolved_port(self) -> int:
-        return self.proxy_port or self.brightdata_port
 
 
 class WebAgent:
@@ -105,40 +70,35 @@ class WebAgent:
 
         # Initialize proxy manager if credentials provided
         self.proxy_manager = None
-        username = self.config.resolved_username
-        password = self.config.resolved_password
-        if username and password:
-            proxy_type_map = {
-                "residential": ProxyType.RESIDENTIAL,
-                "datacenter": ProxyType.DATACENTER,
-                "mobile": ProxyType.MOBILE,
-                "isp": ProxyType.ISP,
-            }
-            proxy_type = proxy_type_map.get(
-                self.config.proxy_type.lower(), ProxyType.RESIDENTIAL
+        if (
+            not self.config.no_proxy
+            and self.config.smartproxy_username
+            and self.config.smartproxy_password
+        ):
+            backend = SmartProxyISPBackend(
+                username=self.config.smartproxy_username,
+                password=self.config.smartproxy_password,
+                host=self.config.smartproxy_host,
+                port=self.config.smartproxy_port,
             )
-
             self.proxy_manager = ProxyManager(
-                username=username,
-                password=password,
-                host=self.config.resolved_host,
-                port=self.config.resolved_port,
-                proxy_type=proxy_type,
-                provider=self.config.proxy_provider,
+                backend=backend,
+                area=self.config.area,
                 event_bus=event_bus,
                 metrics_collector=metrics_collector,
             )
-            logger.info(f"Proxy enabled: provider={self.config.proxy_provider}, type={proxy_type.value}")
+            logger.info(f"Proxy enabled: provider=smartproxy, area={self.config.area}")
         else:
-            logger.info("Proxy disabled: credentials not set (direct connection)")
+            logger.info("Proxy disabled: direct connection")
 
-        self.ua_manager = UserAgentManager()
+        self.ua_manager = UserAgentManager(gologin_token=self.config.gologin_api_token)
         self.controller = ParallelController(
             proxy_manager=self.proxy_manager,
             ua_manager=self.ua_manager,
             max_workers=self.config.parallel_sessions,
             headless=self.config.headless,
             max_retries=self.config.max_retries,
+            area=self.config.area,
             event_bus=event_bus,
             metrics_collector=metrics_collector,
         )
@@ -239,20 +199,3 @@ class WebAgent:
         if self.proxy_manager:
             return await self.proxy_manager.health_check_all()
         return {}
-
-
-# Convenience function for quick usage
-async def create_agent(
-    brightdata_username: str = "",
-    brightdata_password: str = "",
-    parallel_sessions: int = 5,
-    headless: bool = True,
-) -> WebAgent:
-    """Create and return a configured WebAgent"""
-    config = AgentConfig(
-        brightdata_username=brightdata_username,
-        brightdata_password=brightdata_password,
-        parallel_sessions=parallel_sessions,
-        headless=headless,
-    )
-    return WebAgent(config)

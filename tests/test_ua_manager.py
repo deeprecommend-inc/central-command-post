@@ -2,7 +2,25 @@
 Tests for UserAgentManager
 """
 import pytest
-from src.ua_manager import UserAgentManager, BrowserProfile, LRUCache
+from unittest.mock import patch, MagicMock
+from src.ua_manager import UserAgentManager, BrowserProfile, LRUCache, GoLoginClient
+
+
+# Sample GoLogin fingerprint response
+SAMPLE_FINGERPRINT = {
+    "navigator": {
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "resolution": "1920x1080",
+        "language": "en-US",
+        "platform": "Win32",
+        "hardwareConcurrency": 4,
+        "deviceMemory": 4,
+        "maxTouchPoints": 10,
+    },
+    "fonts": {},
+    "webgl": {},
+    "webRtc": {},
+}
 
 
 class TestLRUCache:
@@ -87,12 +105,68 @@ class TestBrowserProfile:
         assert context["timezone_id"] == "America/New_York"
 
 
+class TestGoLoginClient:
+    """Tests for GoLoginClient"""
+
+    def test_init(self):
+        client = GoLoginClient(api_token="test-token")
+        assert client._token == "test-token"
+        assert client._headers == {"Authorization": "Bearer test-token"}
+
+    @patch("src.ua_manager._requests.get")
+    def test_get_random_fingerprint_success(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = SAMPLE_FINGERPRINT
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+
+        client = GoLoginClient(api_token="test-token")
+        fp = client.get_random_fingerprint(os_type="win")
+
+        assert fp is not None
+        assert fp["navigator"]["userAgent"].startswith("Mozilla/5.0")
+        mock_get.assert_called_once_with(
+            "https://api.gologin.com/browser/fingerprint",
+            params={"os": "win"},
+            headers={"Authorization": "Bearer test-token"},
+            timeout=10,
+        )
+
+    @patch("src.ua_manager._requests.get")
+    def test_get_random_fingerprint_api_error(self, mock_get):
+        mock_get.side_effect = Exception("Connection refused")
+        client = GoLoginClient(api_token="test-token")
+        fp = client.get_random_fingerprint()
+        assert fp is None
+
+    @patch("src.ua_manager._requests.get")
+    def test_get_random_fingerprint_http_error(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = Exception("401 Unauthorized")
+        mock_get.return_value = mock_resp
+
+        client = GoLoginClient(api_token="bad-token")
+        fp = client.get_random_fingerprint()
+        assert fp is None
+
+
 class TestUserAgentManager:
     """Tests for UserAgentManager"""
 
     def test_initialization(self):
         manager = UserAgentManager()
         assert manager is not None
+        assert manager._gologin is None
+
+    def test_initialization_with_gologin_token(self):
+        manager = UserAgentManager(gologin_token="test-token")
+        assert manager._gologin is not None
+        assert isinstance(manager._gologin, GoLoginClient)
+
+    def test_initialization_empty_gologin_token(self):
+        manager = UserAgentManager(gologin_token="")
+        assert manager._gologin is None
 
     def test_get_random_profile(self):
         manager = UserAgentManager()
@@ -102,6 +176,75 @@ class TestUserAgentManager:
         assert len(profile.user_agent) > 0
         assert profile.viewport_width > 0
         assert profile.viewport_height > 0
+
+    @patch("src.ua_manager._requests.get")
+    def test_get_random_profile_with_gologin(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = SAMPLE_FINGERPRINT
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+
+        manager = UserAgentManager(gologin_token="test-token")
+        profile = manager.get_random_profile()
+
+        assert profile.user_agent == SAMPLE_FINGERPRINT["navigator"]["userAgent"]
+        assert profile.viewport_width == 1920
+        assert profile.viewport_height == 1080
+        assert profile.platform == "Win32"
+
+    @patch("src.ua_manager._requests.get")
+    def test_get_random_profile_gologin_fallback(self, mock_get):
+        """When GoLogin API fails, should fall back to fake_useragent"""
+        mock_get.side_effect = Exception("API down")
+
+        manager = UserAgentManager(gologin_token="test-token")
+        profile = manager.get_random_profile()
+
+        # Should still return a valid profile via fallback
+        assert profile is not None
+        assert len(profile.user_agent) > 0
+        assert profile.viewport_width > 0
+
+    @patch("src.ua_manager._requests.get")
+    def test_get_area_profile_with_gologin_overrides_locale_timezone(self, mock_get):
+        """GoLogin UA should be used but locale/timezone come from AREA_PROFILES"""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = SAMPLE_FINGERPRINT
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+
+        manager = UserAgentManager(gologin_token="test-token")
+        profile = manager.get_area_profile(area="jp")
+
+        # UA from GoLogin
+        assert profile.user_agent == SAMPLE_FINGERPRINT["navigator"]["userAgent"]
+        # Locale and timezone from AREA_PROFILES (Japan)
+        assert profile.locale == "ja-JP"
+        assert profile.timezone == "Asia/Tokyo"
+
+    @patch("src.ua_manager._requests.get")
+    def test_get_area_profile_gologin_fallback(self, mock_get):
+        """When GoLogin API fails in area profile, should fall back"""
+        mock_get.side_effect = Exception("API down")
+
+        manager = UserAgentManager(gologin_token="test-token")
+        profile = manager.get_area_profile(area="jp")
+
+        assert profile is not None
+        assert profile.locale == "ja-JP"
+        assert profile.timezone == "Asia/Tokyo"
+
+    @patch("src.ua_manager._requests.get")
+    def test_get_chrome_profile_with_gologin(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = SAMPLE_FINGERPRINT
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+
+        manager = UserAgentManager(gologin_token="test-token")
+        profile = manager.get_chrome_profile()
+
+        assert profile.user_agent == SAMPLE_FINGERPRINT["navigator"]["userAgent"]
 
     def test_get_profile_with_session_id(self):
         manager = UserAgentManager()
@@ -181,3 +324,48 @@ class TestUserAgentManager:
         stats = manager.get_cache_stats()
         assert stats["max_profiles"] == 50
         assert stats["cached_profiles"] == 0
+
+    def test_parse_resolution_valid(self):
+        assert UserAgentManager._parse_resolution("1920x1080") == (1920, 1080)
+        assert UserAgentManager._parse_resolution("2560x1440") == (2560, 1440)
+
+    def test_parse_resolution_invalid(self):
+        assert UserAgentManager._parse_resolution("invalid") is None
+        assert UserAgentManager._parse_resolution("") is None
+        assert UserAgentManager._parse_resolution(None) is None
+
+    def test_platform_from_ua(self):
+        assert UserAgentManager._platform_from_ua("Mozilla/5.0 (Windows NT 10.0)") == "Windows"
+        assert UserAgentManager._platform_from_ua("Mozilla/5.0 (Macintosh; Intel Mac OS X)") == "MacIntel"
+        assert UserAgentManager._platform_from_ua("Mozilla/5.0 (X11; Linux x86_64)") == "Linux x86_64"
+
+    @patch("src.ua_manager._requests.get")
+    def test_gologin_fingerprint_empty_ua_falls_back(self, mock_get):
+        """If GoLogin returns empty UA, should fall back to fake_useragent"""
+        bad_fp = {"navigator": {"userAgent": "", "resolution": "1920x1080"}}
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = bad_fp
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+
+        manager = UserAgentManager(gologin_token="test-token")
+        profile = manager.get_random_profile()
+
+        # Should fall back -- profile UA should not be empty
+        assert len(profile.user_agent) > 0
+
+    @patch("src.ua_manager._requests.get")
+    def test_gologin_session_caching(self, mock_get):
+        """GoLogin profile should be cached per session_id"""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = SAMPLE_FINGERPRINT
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+
+        manager = UserAgentManager(gologin_token="test-token")
+        p1 = manager.get_random_profile(session_id="s1")
+        p2 = manager.get_random_profile(session_id="s1")
+
+        # Second call should hit cache, not API
+        assert mock_get.call_count == 1
+        assert p1.user_agent == p2.user_agent

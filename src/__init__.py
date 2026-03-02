@@ -7,15 +7,13 @@ CCP - Central Command Platform
 from .web_agent import WebAgent, AgentConfig
 from .proxy_manager import ProxyManager
 from .proxy_provider import (
-    ProxyType, ProxyProvider, ProxyConfig, ProxyProviderBackend,
-    BrightDataBackend, DataImpulseBackend, GeoNodeBackend, GenericProxyBackend,
-    create_proxy_backend,
+    ProxyProvider, ProxyConfig, SmartProxyISPBackend,
 )
-from .adspower_client import AdsPowerClient, AdsPowerConfig, AdsPowerProfile
-from .ua_manager import UserAgentManager
+from .ua_manager import UserAgentManager, GoLoginClient
 from .browser_worker import BrowserWorker, WorkerResult, ErrorType
 from .parallel_controller import ParallelController, TaskResult
 from .browser_use_agent import BrowserUseAgent
+from .scrapling_agent import ScraplingAgent, ScraplingConfig
 from .human_score import HumanScoreTracker, HumanScoreReport, MetricResult
 from .logging_config import configure_logging
 from .rate_limiter import TokenBucketRateLimiter, DomainRateLimiter
@@ -95,25 +93,19 @@ __all__ = [
     "WebAgent",
     "AgentConfig",
     "ProxyManager",
-    "ProxyType",
     "ProxyProvider",
     "ProxyConfig",
-    "ProxyProviderBackend",
-    "BrightDataBackend",
-    "DataImpulseBackend",
-    "GeoNodeBackend",
-    "GenericProxyBackend",
-    "create_proxy_backend",
-    "AdsPowerClient",
-    "AdsPowerConfig",
-    "AdsPowerProfile",
+    "SmartProxyISPBackend",
     "UserAgentManager",
+    "GoLoginClient",
     "BrowserWorker",
     "WorkerResult",
     "ErrorType",
     "ParallelController",
     "TaskResult",
     "BrowserUseAgent",
+    "ScraplingAgent",
+    "ScraplingConfig",
     "HumanScoreTracker",
     "HumanScoreReport",
     "MetricResult",

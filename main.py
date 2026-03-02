@@ -24,11 +24,11 @@ async def demo():
     load_dotenv()
 
     config = AgentConfig(
-        brightdata_username=settings.brightdata_username,
-        brightdata_password=settings.brightdata_password,
-        brightdata_host=settings.brightdata_host,
-        brightdata_port=settings.brightdata_port,
-        proxy_type=settings.brightdata_proxy_type,  # 住宅IP (residential) がデフォルト
+        smartproxy_username=settings.smartproxy_username,
+        smartproxy_password=settings.smartproxy_password,
+        smartproxy_host=settings.smartproxy_host,
+        smartproxy_port=settings.smartproxy_port,
+        area=settings.smartproxy_area,
         parallel_sessions=settings.parallel_sessions,
         headless=settings.headless,
     )
@@ -66,9 +66,9 @@ async def single_navigation(url: str):
     load_dotenv()
 
     config = AgentConfig(
-        brightdata_username=settings.brightdata_username,
-        brightdata_password=settings.brightdata_password,
-        proxy_type=settings.brightdata_proxy_type,  # 住宅IP
+        smartproxy_username=settings.smartproxy_username,
+        smartproxy_password=settings.smartproxy_password,
+        area=settings.smartproxy_area,
         headless=settings.headless,
     )
 

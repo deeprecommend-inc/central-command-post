@@ -22,10 +22,10 @@ import subprocess
 from browser_use import Agent, BrowserProfile, BrowserSession, Tools, ActionResult, ChatOpenAI
 
 from .proxy_manager import ProxyManager
-from .proxy_provider import ProxyType, ProxyProvider, BrightDataBackend, DataImpulseBackend, GeoNodeBackend
+from .proxy_provider import SmartProxyISPBackend
 from .ua_manager import UserAgentManager
-from .adspower_client import AdsPowerClient, AdsPowerConfig
 from .human_score import HumanScoreTracker, HumanScoreReport
+from .human_timing import random_delay, action_throttle
 from .command.captcha_solver import (
     CaptchaDetector,
     CaptchaType,
@@ -36,6 +36,15 @@ from .command.captcha_solver import (
 )
 from .command.vision_captcha_solver import VisionCaptchaSolver
 
+
+HUMAN_BEHAVIOR_PROMPT = """
+Behave like a real human browsing the web:
+- Scroll the page before clicking on elements to simulate reading.
+- Vary your action types: mix clicks, scrolling, typing, and navigation.
+- Visit multiple pages when relevant -- follow links, check related content.
+- After performing an action, briefly review the result before proceeding.
+- Do not rush through actions; take natural pauses between steps.
+"""
 
 CAPTCHA_SYSTEM_PROMPT = """
 When you encounter a CAPTCHA on a page, use the solve_captcha action to detect and solve it automatically.
@@ -206,36 +215,24 @@ def launch_browser_cdp(
 class BrowserUseConfig:
     """Configuration for BrowserUseAgent"""
 
-    # Proxy provider: brightdata, dataimpulse, generic
-    proxy_provider: str = "brightdata"
+    # SmartProxy ISP credentials
+    smartproxy_username: str = ""
+    smartproxy_password: str = ""
+    smartproxy_host: str = "isp.decodo.com"
+    smartproxy_port: int = 10001
 
-    # Proxy credentials (shared across providers)
-    proxy_username: str = ""
-    proxy_password: str = ""
-    proxy_host: str = ""
-    proxy_port: int = 0
-    proxy_urls: Optional[list[str]] = None  # For generic provider
-    proxy_type: str = "residential"
+    # Area/timezone
+    area: str = "us"
+    timezone: str = ""
 
-    # Legacy BrightData fields (mapped to proxy_username/password)
-    brightdata_username: str = ""
-    brightdata_password: str = ""
-    brightdata_host: str = "brd.superproxy.io"
-    brightdata_port: int = 22225
-
-    # Antidetect browser: adspower, none
-    antidetect: str = "none"
-    adspower_api_base: str = "http://local.adspower.com:50325"
-    adspower_profile_id: str = ""  # Specific profile, or auto-select
+    # No proxy mode
+    no_proxy: bool = False
 
     # LLM settings
     llm_provider: str = "openai"  # openai, anthropic, local
     llm_api_key: str = ""
     llm_base_url: str = ""  # For local LLM (Ollama, LM Studio, vLLM, etc.)
     model: str = "gpt-4o"
-
-    # Legacy: kept for backward compatibility
-    openai_api_key: str = ""
 
     # Browser settings
     headless: bool = True
@@ -248,35 +245,20 @@ class BrowserUseConfig:
     llm_timeout: int = 300  # 5 minutes for local LLM
     step_timeout: int = 600  # 10 minutes per step
 
+    # GoLogin fingerprint API token
+    gologin_api_token: str = ""
+
     # CAPTCHA solver preference
     captcha_solver: str = "vision"
 
     @property
     def effective_api_key(self) -> str:
-        """Get effective API key (llm_api_key > openai_api_key > 'not-needed' for local)"""
+        """Get effective API key ('not-needed' for local)"""
         if self.llm_api_key:
             return self.llm_api_key
-        if self.openai_api_key:
-            return self.openai_api_key
         if self.llm_provider == "local":
             return "not-needed"
         return ""
-
-    @property
-    def resolved_proxy_username(self) -> str:
-        return self.proxy_username or self.brightdata_username
-
-    @property
-    def resolved_proxy_password(self) -> str:
-        return self.proxy_password or self.brightdata_password
-
-    @property
-    def resolved_proxy_host(self) -> str:
-        return self.proxy_host or self.brightdata_host
-
-    @property
-    def resolved_proxy_port(self) -> int:
-        return self.proxy_port or self.brightdata_port
 
 
 class BrowserUseAgent:
@@ -296,56 +278,28 @@ class BrowserUseAgent:
     def __init__(self, config: BrowserUseConfig):
         self.config = config
 
-        # Initialize proxy manager (multi-provider)
+        # Initialize proxy manager (SmartProxy ISP)
         self.proxy_manager: Optional[ProxyManager] = None
-        username = config.resolved_proxy_username
-        password = config.resolved_proxy_password
-        if username and password:
-            if self._test_proxy_connectivity(config):
-                proxy_type_map = {
-                    "residential": ProxyType.RESIDENTIAL,
-                    "datacenter": ProxyType.DATACENTER,
-                    "mobile": ProxyType.MOBILE,
-                    "isp": ProxyType.ISP,
-                }
-                proxy_type = proxy_type_map.get(config.proxy_type.lower(), ProxyType.RESIDENTIAL)
-
+        if not config.no_proxy and config.smartproxy_username and config.smartproxy_password:
+            backend = SmartProxyISPBackend(
+                username=config.smartproxy_username,
+                password=config.smartproxy_password,
+                host=config.smartproxy_host,
+                port=config.smartproxy_port,
+            )
+            if self._test_proxy_connectivity(backend, config.area):
                 self.proxy_manager = ProxyManager(
-                    username=username,
-                    password=password,
-                    host=config.resolved_proxy_host,
-                    port=config.resolved_proxy_port,
-                    proxy_type=proxy_type,
-                    provider=config.proxy_provider,
-                    proxy_urls=config.proxy_urls,
+                    backend=backend,
+                    area=config.area,
                 )
-                logger.info(f"Proxy enabled: provider={config.proxy_provider}, type={proxy_type.value}")
+                logger.info(f"Proxy enabled: provider=smartproxy, area={config.area}")
             else:
                 logger.warning("Proxy connectivity test failed, falling back to direct connection")
-        elif config.proxy_urls:
-            proxy_type = ProxyType.RESIDENTIAL
-            self.proxy_manager = ProxyManager(
-                proxy_urls=config.proxy_urls,
-                proxy_type=proxy_type,
-                provider="generic",
-            )
-            logger.info("Proxy enabled: provider=generic")
         else:
             logger.info("Proxy disabled: direct connection")
 
-        # Initialize AdsPower client
-        self.adspower: Optional[AdsPowerClient] = None
-        if config.antidetect == "adspower":
-            ads_config = AdsPowerConfig(api_base=config.adspower_api_base)
-            client = AdsPowerClient(ads_config)
-            if client.check_status():
-                self.adspower = client
-                logger.info(f"AdsPower enabled: {config.adspower_api_base}")
-            else:
-                logger.warning("AdsPower not available, falling back to built-in browser")
-
         # Initialize UA manager
-        self.ua_manager = UserAgentManager()
+        self.ua_manager = UserAgentManager(gologin_token=config.gologin_api_token)
 
         # Initialize LLM
         self.llm = self._create_llm(config)
@@ -395,16 +349,12 @@ class BrowserUseAgent:
         return llm
 
     @staticmethod
-    def _test_proxy_connectivity(config: BrowserUseConfig) -> bool:
+    def _test_proxy_connectivity(backend: SmartProxyISPBackend, area: str) -> bool:
         """Test proxy connectivity before using it. Returns True if proxy works."""
         import requests as req
 
-        username = config.resolved_proxy_username
-        password = config.resolved_proxy_password
-        host = config.resolved_proxy_host
-        port = config.resolved_proxy_port
-
-        proxy_url = f"http://{username}:{password}@{host}:{port}"
+        proxy_config = backend.create_proxy(country=area, session_id="test")
+        proxy_url = proxy_config.get_url()
         try:
             resp = req.get(
                 "http://httpbin.org/ip",
@@ -412,7 +362,7 @@ class BrowserUseAgent:
                 timeout=10,
             )
             if resp.status_code == 200:
-                logger.info(f"Proxy test OK ({config.proxy_provider}): {resp.json().get('origin', 'unknown')}")
+                logger.info(f"Proxy test OK (smartproxy): {resp.json().get('origin', 'unknown')}")
                 return True
             logger.warning(f"Proxy test failed: HTTP {resp.status_code}")
             return False
@@ -464,7 +414,7 @@ class BrowserUseAgent:
             logger.info("CAPTCHA solver: anti-captcha enabled")
 
         if not self.captcha_solvers:
-            logger.warning("No CAPTCHA solvers configured (set OPENAI_API_KEY for Vision solver)")
+            logger.warning("No CAPTCHA solvers configured (set LLM_API_KEY for Vision solver)")
 
     def _create_tools(self) -> Tools:
         """Create custom Tools with CAPTCHA-related actions"""
@@ -606,39 +556,25 @@ class BrowserUseAgent:
             proxy = self.proxy_manager.get_proxy(new_session=True)
             backend = self.proxy_manager.backend
 
-            if isinstance(backend, BrightDataBackend):
-                proxy_server = backend.get_server_url()
-                proxy_username, proxy_password = backend.get_auth(
-                    country=proxy.country, session_id=proxy.session_id
-                )
-                extension_dir = _create_proxy_auth_extension(proxy_username, proxy_password)
-            elif isinstance(backend, DataImpulseBackend):
-                proxy_server = backend.get_server_url(proxy.proxy_type)
-                proxy_username, proxy_password = backend.get_auth(
-                    country=proxy.country, session_id=proxy.session_id
-                )
-                extension_dir = _create_proxy_auth_extension(proxy_username, proxy_password)
-            elif isinstance(backend, GeoNodeBackend):
-                proxy_server = backend.get_server_url()
-                proxy_username, proxy_password = backend.get_auth(
-                    country=proxy.country, session_id=proxy.session_id
-                )
-                extension_dir = _create_proxy_auth_extension(proxy_username, proxy_password)
-            else:
-                # Generic proxy: pass full URL as proxy_server
-                proxy_server = proxy.get_url()
+            proxy_server = backend.get_server_url()
+            proxy_username, proxy_password = backend.get_auth(
+                country=proxy.country, session_id=proxy.session_id
+            )
+            extension_dir = _create_proxy_auth_extension(proxy_username, proxy_password)
 
             logger.info(
-                f"Using proxy: provider={self.proxy_manager.provider_name}, "
-                f"country={proxy.country}, type={proxy.proxy_type.value}"
+                f"Using proxy: provider=smartproxy, "
+                f"country={proxy.country}, session={proxy.session_id}"
             )
 
-        # User agent (skip if AdsPower handles fingerprinting)
-        user_agent = None
-        if not self.adspower:
-            profile = self.ua_manager.get_random_profile(session_id=session_id)
-            user_agent = profile.user_agent
-            logger.info(f"Using UA: {user_agent[:60]}...")
+        # User agent with area-aware profile
+        profile = self.ua_manager.get_area_profile(
+            area=self.config.area,
+            timezone=self.config.timezone or None,
+            session_id=session_id,
+        )
+        user_agent = profile.user_agent
+        logger.info(f"Using UA: {user_agent[:60]}...")
 
         return proxy_server, user_agent, extension_dir
 
@@ -646,11 +582,8 @@ class BrowserUseAgent:
         """
         Run a task using natural language prompt with CAPTCHA support.
 
-        Launch modes:
-          1. AdsPower: Use AdsPower's fingerprint browser via CDP
-          2. Built-in: Launch Chrome manually via CDP with proxy auth extension
-
-        Proxy auth is handled via a temporary Chrome extension (built-in mode).
+        Launches Chrome manually via CDP with proxy auth extension.
+        Injects human-like timing via on_step_start/on_step_end callbacks.
         Computes a human-likeness score from session behavior.
         """
         logger.info(f"Running task: {task[:100]}...")
@@ -658,42 +591,49 @@ class BrowserUseAgent:
         tracker = HumanScoreTracker()
         proxy_server, user_agent, extension_dir = self._get_launch_params()
         proc = None
-        ads_profile_id = None
 
         # Record IP/fingerprint from current proxy + UA
         self._record_session_fingerprint(tracker, user_agent)
 
+        # Collect real timestamps for accurate history
+        step_timestamps: list[float] = []
+        step_count = [0]
+        session_start = time.time()
+
+        async def _on_step_start(step):
+            """Human timing hook: delay before each agent step."""
+            step_count[0] += 1
+            # Random delay (log-normal, CV ~0.53 satisfies H_T1 >= 0.20)
+            delay = random_delay(1.5, 4.0)
+            # Throttle check (H_G1 <= 20 actions/min)
+            elapsed = time.time() - session_start
+            throttle = action_throttle(step_count[0], elapsed)
+            total_wait = delay + throttle
+            if total_wait > 0:
+                await asyncio.sleep(total_wait)
+            step_timestamps.append(time.time())
+
+        async def _on_step_end(step):
+            """Human timing hook: delay after each agent step."""
+            delay = random_delay(0.5, 2.0)
+            await asyncio.sleep(delay)
+            step_timestamps.append(time.time())
+
         try:
-            ws_url = None
+            proc, ws_url, port = launch_browser_cdp(
+                headless=self.config.headless,
+                proxy_server=proxy_server,
+                user_agent=user_agent,
+                extension_dir=extension_dir,
+                user_data_dir=self.config.session_dir or None,
+            )
 
-            # Mode 1: AdsPower fingerprint browser
-            if self.adspower:
-                ads_profile_id = self.config.adspower_profile_id
-                if not ads_profile_id:
-                    # Auto-select first available profile
-                    profiles = await self.adspower.list_profiles()
-                    if profiles:
-                        ads_profile_id = profiles[0].profile_id
-                    else:
-                        raise RuntimeError("No AdsPower profiles available")
-
-                ws_url = await self.adspower.start_profile(ads_profile_id)
-                if not ws_url:
-                    raise RuntimeError(f"Failed to start AdsPower profile {ads_profile_id}")
-                logger.info(f"AdsPower browser started: profile={ads_profile_id}")
-
-            # Mode 2: Built-in Chrome via CDP
-            if not ws_url:
-                proc, ws_url, port = launch_browser_cdp(
-                    headless=self.config.headless,
-                    proxy_server=proxy_server,
-                    user_agent=user_agent,
-                    extension_dir=extension_dir,
-                    user_data_dir=self.config.session_dir or None,
-                )
-
-            # Create browser profile with CDP URL
-            browser_profile = BrowserProfile(cdp_url=ws_url, headless=self.config.headless)
+            # Create browser profile with CDP URL and human-like wait
+            browser_profile = BrowserProfile(
+                cdp_url=ws_url,
+                headless=self.config.headless,
+                wait_between_actions=1.5,
+            )
 
             # Auto-disable vision for local LLM (screenshot processing is too slow)
             use_vision = self.config.use_vision
@@ -706,16 +646,18 @@ class BrowserUseAgent:
                 llm=self.llm,
                 browser_profile=browser_profile,
                 tools=self.tools,
-                extend_system_message=CAPTCHA_SYSTEM_PROMPT,
+                extend_system_message=HUMAN_BEHAVIOR_PROMPT + CAPTCHA_SYSTEM_PROMPT,
                 use_vision=use_vision,
                 llm_timeout=self.config.llm_timeout,
                 step_timeout=self.config.step_timeout,
+                on_step_start=_on_step_start,
+                on_step_end=_on_step_end,
             )
 
             result = await agent.run()
 
             # Harvest actions from agent history for human score
-            self._harvest_agent_history(agent, tracker)
+            self._harvest_agent_history(agent, tracker, step_timestamps)
 
             # Compute human score
             score_report = tracker.compute()
@@ -738,9 +680,6 @@ class BrowserUseAgent:
                 "human_score": score_report.summary(),
             }
         finally:
-            # Clean up AdsPower profile
-            if ads_profile_id and self.adspower:
-                await self.adspower.stop_profile(ads_profile_id)
             # Clean up built-in Chrome
             if proc:
                 proc.terminate()
@@ -756,27 +695,40 @@ class BrowserUseAgent:
         """Record IP and fingerprint data from current proxy/UA configuration"""
         import hashlib
         fp_hash = hashlib.sha256(user_agent.encode()).hexdigest()[:16] if user_agent else ""
-        country = ""
+        country = self.config.area
         ip = "direct"
         if self.proxy_manager:
-            proxy = self.proxy_manager.get_proxy(new_session=False)
-            country = proxy.country or ""
-            ip = f"{self.config.resolved_proxy_host}:{self.config.resolved_proxy_port}"
-        if self.adspower:
-            fp_hash = f"adspower_{self.config.adspower_profile_id or 'auto'}"
+            ip = f"{self.config.smartproxy_host}:{self.config.smartproxy_port}"
         tracker.record_ip(ip=ip, country=country, fingerprint_hash=fp_hash)
 
     @staticmethod
-    def _harvest_agent_history(agent: Agent, tracker: HumanScoreTracker) -> None:
-        """Extract action events from browser-use Agent history into the tracker"""
+    def _harvest_agent_history(
+        agent: Agent,
+        tracker: HumanScoreTracker,
+        step_timestamps: Optional[list[float]] = None,
+    ) -> None:
+        """Extract action events from browser-use Agent history into the tracker.
+
+        Uses real timestamps from on_step_start/on_step_end callbacks when available,
+        falling back to approximation. Records mixed outcomes for H_C2 improvement.
+        """
         try:
             history = agent.history if hasattr(agent, "history") else None
             if not history:
                 return
             items = history.history if hasattr(history, "history") else []
-            base_time = time.time() - len(items) * 2  # approximate timestamps
+
+            # Use real timestamps if available, otherwise approximate
+            has_real_ts = step_timestamps and len(step_timestamps) > 0
+
             for i, item in enumerate(items):
-                ts = base_time + i * 2  # ~2s per action as approximation
+                # Real timestamp: step_timestamps has pairs (start, end) per step
+                if has_real_ts and i * 2 < len(step_timestamps):
+                    ts = step_timestamps[i * 2]
+                else:
+                    base_time = time.time() - len(items) * 3
+                    ts = base_time + i * 3
+
                 # Extract action type from history item
                 action_name = "unknown"
                 if hasattr(item, "model_output") and item.model_output:
@@ -801,14 +753,33 @@ class BrowserUseAgent:
                             url = res.current_url or ""
                         elif hasattr(res, "extracted_content") and res.extracted_content:
                             url = str(res.extracted_content)[:200]
+
+                        # Compute dwell from real timestamps
+                        if has_real_ts and i * 2 + 1 < len(step_timestamps):
+                            actual_dwell = step_timestamps[i * 2 + 1] - step_timestamps[i * 2]
+                        else:
+                            actual_dwell = 3.0
+
+                        has_error = hasattr(res, "error") and res.error
+                        completed = not has_error
+
                         if url:
-                            # Dwell approximation: 2s per step
                             tracker.record_page_visit(
-                                url=url, dwell_sec=2.0,
-                                completed=not (hasattr(res, "error") and res.error),
+                                url=url, dwell_sec=actual_dwell,
+                                completed=completed,
                                 bounced=False,
                                 clicked=action_name in ("click_element", "click", "input_text"),
                             )
+
+                        # Mixed outcomes for H_C2 (outcome distribution)
+                        if has_error:
+                            tracker.record_outcome("failure")
+                        elif action_name in ("go_to_url", "open_tab"):
+                            tracker.record_outcome("navigation")
+                        elif action_name in ("extract_content", "get_text"):
+                            tracker.record_outcome("partial")
+                        else:
+                            tracker.record_outcome("success")
         except Exception as e:
             logger.debug(f"History harvest: {e}")
 

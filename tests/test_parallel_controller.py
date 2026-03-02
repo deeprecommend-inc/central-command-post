@@ -6,7 +6,8 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from src.parallel_controller import ParallelController, TaskResult
 from src.browser_worker import WorkerResult, ErrorType
-from src.proxy_manager import ProxyManager, ProxyType
+from src.proxy_manager import ProxyManager
+from src.proxy_provider import SmartProxyISPBackend
 
 
 class TestTaskResult:
@@ -44,7 +45,8 @@ class TestParallelController:
         assert controller.max_retries == 3
 
     def test_initialization_with_proxy_manager(self):
-        proxy_manager = ProxyManager(username="user", password="pass")
+        backend = SmartProxyISPBackend(username="user", password="pass")
+        proxy_manager = ProxyManager(backend=backend)
         controller = ParallelController(proxy_manager=proxy_manager)
         assert controller.proxy_manager is proxy_manager
 
