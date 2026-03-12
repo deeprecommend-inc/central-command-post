@@ -156,6 +156,42 @@ python run.py -m hermes3 --no-proxy "Search for AI news"
 - 指数バックオフによる再試行（1s → 2s → 4s、最大30s）
 - プロキシ切断時の自動切り替え
 
+## アカウントパイプライン（Account Pipeline）
+
+### 4層アーキテクチャ
+
+```text
+[ Control Layer ]    SQLite状態管理、レジューム
+       ↓
+[ Environment Layer ] GoLogin + SmartProxy（プロファイル分離、IP分離）
+       ↓
+[ Action Layer ]     Warmup（Cookie育成）/ BrowserUse（フォーム操作）
+       ↓
+[ External Layer ]   PVA（SMS認証）/ LLM API（自律ブラウジング）
+```
+
+### パイプラインフロー
+
+```text
+pending -> warmup (3日+) -> creating -> sms_wait -> sns_expand -> active
+```
+
+### コンポーネント
+
+| ファイル | 層 | 役割 |
+|----------|-----|------|
+| `src/account_db.py` | Control | SQLiteアカウント状態管理 |
+| `src/warmup.py` | Action | Cookie育成エンジン（LLM自律ブラウジング） |
+| `src/pva.py` | External | PVA SMS認証（5sim / sms-activate） |
+| `src/account_factory.py` | Orchestrator | パイプライン全体制御 |
+
+### 環境変数
+
+| 変数 | 説明 |
+|------|------|
+| PVA_5SIM_KEY | 5sim.net APIキー |
+| PVA_SMS_ACTIVATE_KEY | sms-activate.org APIキー |
+
 ## 技術スタック
 
 - 自動化: Playwright

@@ -107,6 +107,42 @@ python run.py -a jp "Go to https://httpbin.org/ip and get the IP"
 python run.py -p 3 -a us "Go to https://httpbin.org/ip and get the IP"
 ```
 
+### Account Pipeline
+
+Automated account creation with warmup, SMS verification, and SNS expansion.
+
+```bash
+# Initialize 10 accounts (US area)
+python run.py -n 10 -a us account-init
+
+# Run warmup session (call daily for 3+ days)
+python run.py account-warmup
+
+# Create Gmail accounts (for warmup-ready profiles)
+python run.py account-create
+
+# Expand to SNS (X, YouTube, Instagram, TikTok)
+python run.py account-expand
+
+# Or run full pipeline
+python run.py account-pipeline
+
+# Check status
+python run.py account-status
+```
+
+Pipeline flow:
+```
+pending -> warmup (3+ days) -> creating -> sms_wait -> sns_expand -> active
+```
+
+Each account gets:
+- Isolated browser profile (GoLogin fingerprint)
+- Dedicated proxy IP (SmartProxy ISP)
+- Cookie warmup via autonomous LLM browsing
+- SMS verification via PVA service (5sim / sms-activate)
+- SNS registration (YouTube, X, Instagram, TikTok)
+
 ### Scrapling Stealth Mode
 
 Scrapling provides anti-bot stealth (TLS fingerprint spoofing, CDP runtime patches, Cloudflare bypass) for single-page fetching.
@@ -350,6 +386,13 @@ docker-compose logs -f ccp-api             # View logs
 | `SMARTPROXY_TIMEZONE` | No | Timezone override (default: auto from area) |
 | `HEADLESS` | No | Headless mode (default: true) |
 | `SOLVE_CLOUDFLARE` | No | Enable Cloudflare bypass in scrapling mode (default: false) |
+
+### SMS Verification (PVA)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PVA_5SIM_KEY` | No | 5sim.net API key for SMS verification |
+| `PVA_SMS_ACTIVATE_KEY` | No | sms-activate.org API key for SMS verification |
 
 ### CAPTCHA
 

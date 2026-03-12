@@ -45,6 +45,9 @@ def parse_args(args: list[str]) -> dict:
         "mode": "browser-use",
         "prompt_parts": [],
         "verbose": False,
+        # Account factory options
+        "account_cmd": None,
+        "count": 10,
     }
 
     i = 0
@@ -65,6 +68,9 @@ def parse_args(args: list[str]) -> dict:
         elif arg in ("--mode", "-M") and i + 1 < len(args):
             i += 1
             opts["mode"] = args[i]
+        elif arg in ("--count", "-n") and i + 1 < len(args):
+            i += 1
+            opts["count"] = int(args[i])
         elif arg == "--no-proxy":
             opts["no_proxy"] = True
         elif arg in ("--verbose", "-v"):
@@ -72,6 +78,9 @@ def parse_args(args: list[str]) -> dict:
         elif arg in ("-h", "--help", "help"):
             print_usage()
             sys.exit(0)
+        elif arg in ("account-init", "account-warmup", "account-create",
+                      "account-expand", "account-pipeline", "account-status"):
+            opts["account_cmd"] = arg
         else:
             opts["prompt_parts"].append(arg)
         i += 1
@@ -199,32 +208,111 @@ async def run_scrapling(opts: dict):
             print(f"\nHuman Score: {score}/{max_score} [{verdict}]")
 
 
+async def run_account(opts: dict):
+    """Run account factory commands"""
+    from src.account_factory import AccountFactory, FactoryConfig
+
+    config = FactoryConfig(
+        area=opts["area"],
+        headless=get_env("HEADLESS", "true").lower() == "true",
+        model=opts["model"],
+        no_proxy=opts["no_proxy"],
+        smartproxy_username=get_env("SMARTPROXY_USERNAME"),
+        smartproxy_password=get_env("SMARTPROXY_PASSWORD"),
+        smartproxy_host=get_env("SMARTPROXY_HOST", "isp.decodo.com"),
+        smartproxy_port=int(get_env("SMARTPROXY_PORT", "10001")),
+        llm_provider=get_env("LLM_PROVIDER", "local"),
+        llm_base_url=get_env("LLM_BASE_URL", "http://localhost:11434/v1"),
+        llm_api_key=get_env("LLM_API_KEY") or get_env("OPENAI_API_KEY", ""),
+        llm_timeout=int(get_env("LLM_TIMEOUT", "300")),
+        gologin_api_token=get_env("GOLOGIN_API_TOKEN", ""),
+        pva_5sim_key=get_env("PVA_5SIM_KEY", ""),
+        pva_sms_activate_key=get_env("PVA_SMS_ACTIVATE_KEY", ""),
+    )
+
+    factory = AccountFactory(config)
+    cmd = opts["account_cmd"]
+
+    if cmd == "account-init":
+        accounts = factory.init_accounts(count=opts["count"], area=opts["area"])
+        print(f"Initialized {len(accounts)} accounts (area={opts['area']})")
+        for a in accounts:
+            print(f"  #{a.id} [{a.status.value}] area={a.area}")
+
+    elif cmd == "account-warmup":
+        count = await factory.warmup_pending()
+        print(f"Warmed up {count} accounts")
+
+    elif cmd == "account-create":
+        count = await factory.create_ready_accounts()
+        print(f"Created {count} accounts")
+
+    elif cmd == "account-expand":
+        count = await factory.expand_sns()
+        print(f"Expanded {count} accounts to SNS")
+
+    elif cmd == "account-pipeline":
+        result = await factory.run_pipeline()
+        print(f"Pipeline result: {result}")
+
+    elif cmd == "account-status":
+        status = factory.status()
+        print(f"Total: {status['total']}")
+        for s, cnt in status["summary"].items():
+            print(f"  {s}: {cnt}")
+        if status["warmup_progress"]:
+            print("Warmup progress:")
+            for aid, wp in status["warmup_progress"].items():
+                ready = "READY" if wp["ready"] else f"{wp['days_elapsed']}/{wp['days_required']}d"
+                print(f"  #{aid}: {ready}")
+
+
 def print_usage():
     print("""
-Web Agent CLI
+CCP Web Agent CLI
 
 Usage:
   python run.py [options] "<prompt>"
+  python run.py [options] <account-command>
+
+Modes:
+  browser-use (default)   AI-driven multi-step browser automation
+  scrapling               Stealth single-page fetching
+
+Account Commands:
+  account-init            Initialize accounts (use -n for count, -a for area)
+  account-warmup          Run warmup sessions for pending accounts
+  account-create          Create Gmail for warmup-ready accounts
+  account-expand          Expand created accounts to SNS platforms
+  account-pipeline        Run full pipeline (warmup -> create -> expand)
+  account-status          Show account pipeline status
 
 Options:
   --model, -m <name>      LLM model (default: env LLM_MODEL or dolphin3)
-  --mode, -M <mode>       Execution mode: browser-use (default) or scrapling
+  --mode, -M <mode>       Execution mode: browser-use or scrapling
   --parallel, -p <n>      Parallel workers (default: 1)
   --area, -a <code>       Country code for proxy (default: env SMARTPROXY_AREA or us)
   --timezone, -t <tz>     Timezone override (default: auto from area)
+  --count, -n <n>         Number of accounts to initialize (default: 10)
   --no-proxy              Direct connection (no proxy)
   --verbose, -v           Debug logging
 
 Examples:
+  # Web automation
   python run.py --no-proxy "Go to https://httpbin.org/ip and get the IP"
   python run.py -a jp "Go to https://httpbin.org/ip and get the IP"
   python run.py -p 3 -a us "Go to https://httpbin.org/ip and get the IP"
-  python run.py -m hermes3 --no-proxy "Search google for AI news"
 
   # Scrapling stealth mode
   python run.py -M scrapling --no-proxy "https://example.com"
-  python run.py -M scrapling -a jp "https://httpbin.org/ip"
-  SOLVE_CLOUDFLARE=true python run.py -M scrapling "https://target.com"
+
+  # Account pipeline
+  python run.py -n 10 -a us account-init
+  python run.py account-warmup
+  python run.py account-create
+  python run.py account-expand
+  python run.py account-pipeline
+  python run.py account-status
 
 Environment Variables:
   LLM_PROVIDER            local, openai, anthropic (default: local)
@@ -236,10 +324,10 @@ Environment Variables:
   SMARTPROXY_HOST         SmartProxy host (default: isp.decodo.com)
   SMARTPROXY_PORT         SmartProxy port (default: 10001)
   SMARTPROXY_AREA         Default country code (default: us)
-  SMARTPROXY_TIMEZONE     Default timezone override
   HEADLESS                Run headless (default: true)
-  SOLVE_CLOUDFLARE        Enable Cloudflare bypass in scrapling mode (default: false)
-  GOLOGIN_API_TOKEN       GoLogin API token (realistic browser fingerprints, optional)
+  GOLOGIN_API_TOKEN       GoLogin API token (optional)
+  PVA_5SIM_KEY            5sim.net API key for SMS verification (optional)
+  PVA_SMS_ACTIVATE_KEY    sms-activate.org API key for SMS verification (optional)
 """)
 
 
@@ -253,7 +341,9 @@ def main():
     if opts["verbose"]:
         configure_logging(level="DEBUG", json_format=False)
 
-    if opts["mode"] == "scrapling":
+    if opts["account_cmd"]:
+        asyncio.run(run_account(opts))
+    elif opts["mode"] == "scrapling":
         asyncio.run(run_scrapling(opts))
     else:
         asyncio.run(run(opts))
