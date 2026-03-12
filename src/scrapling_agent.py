@@ -11,6 +11,7 @@ Dual mode with BrowserUseAgent:
 import asyncio
 import os
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -140,10 +141,26 @@ class ScraplingAgent:
         logger.info(f"Scrapling UA: {profile.user_agent[:60]}...")
         return kwargs
 
+    @staticmethod
+    def _extract_url(text: str) -> str:
+        """Extract a URL from text. Handles full URLs and bare domains."""
+        # Match explicit URLs (http/https)
+        m = re.search(r'https?://[^\s,\'"<>]+', text)
+        if m:
+            return m.group(0).rstrip(".,;:!?)")
+
+        # Match bare domains (e.g. "example.com", "httpbin.org/ip")
+        m = re.search(r'(?:^|\s)((?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s,\'"<>]*)?)', text)
+        if m:
+            return "https://" + m.group(1).rstrip(".,;:!?)")
+
+        return ""
+
     def _parse_task(self, task: str | dict) -> dict:
         """Parse task parameter into structured form."""
         if isinstance(task, str):
-            return {"url": task, "page_action": None, "solve_cloudflare": self.config.solve_cloudflare}
+            url = self._extract_url(task)
+            return {"url": url, "page_action": None, "solve_cloudflare": self.config.solve_cloudflare}
         return {
             "url": task.get("url", ""),
             "page_action": task.get("page_action"),
